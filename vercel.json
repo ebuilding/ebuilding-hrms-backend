@@ -1,0 +1,26 @@
+  {
+    "version": 2,
+    "builds": [
+        {
+            "src": "server.js",
+            "use": "@vercel/node",
+            "config": {
+                "includeFiles": [
+                    "dist/**"
+                ]
+            }
+        }
+    ],
+    "routes": [
+        {
+            "src": "/(.*)",
+            "dest": "server.js"
+        }
+    ],
+    "crons": [
+        {
+            "path": "/api/attendance/run-cron",
+            "schedule": "30 0 * * *"
+        }
+    ]
+}
