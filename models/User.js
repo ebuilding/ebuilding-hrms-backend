@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { UserRole } from "../constants/enums.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -6,8 +7,12 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     role: {
       type: String,
-      enum: ["ADMIN", "EMPLOYEE", "SECURITY"],
-      default: "EMPLOYEE",
+      enum: Object.values(UserRole),
+      default: UserRole.EMPLOYEE,
+    },
+    isApproved: {
+      type: Boolean,
+      default: true,
     },
   },
   { timestamps: true },

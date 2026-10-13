@@ -3,6 +3,14 @@ import bcrypt from "bcrypt";
 import User from "../models/User.js";
 import Attendance from "../models/Attendance.js";
 import moment from "moment-timezone";
+import sendEmail from "../config/nodemailer.js";
+import { getWelcomeCredentialsEmail } from "../utils/emailTemplates.js";
+import { createEmployeeSchema } from "../validators/employeeValidator.js";
+import {
+  ApprovalStatus,
+  EmploymentStatus,
+  UserRole,
+} from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -11,7 +19,12 @@ const TZ = "Asia/Kolkata";
 export const getEmployees = async (req, res) => {
   try {
     const { department } = req.query;
-    const where = {};
+    const where = {
+      $or: [
+        { approvalStatus: ApprovalStatus.APPROVED },
+        { approvalStatus: { $exists: false } },
+      ],
+    };
     if (department) where.department = department;
 
     let employees = await Employee.find(where)
@@ -20,9 +33,6 @@ export const getEmployees = async (req, res) => {
       .populate("userId", "email role")
       .populate("department", "name")
       .lean();
-
-    // Filter out guards (SECURITY role)
-    employees = employees.filter((emp) => emp.userId?.role !== "SECURITY");
 
     const todayStart = moment.tz(TZ).startOf("day").toDate();
     const todayEnd = moment.tz(TZ).endOf("day").toDate();
@@ -84,6 +94,18 @@ export const getEmployeeById = async (req, res) => {
 // POST /api/employees
 export const createEmployee = async (req, res) => {
   try {
+    const parseResult = createEmployeeSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const firstError =
+        parseResult.error.issues?.[0]?.message ||
+        parseResult.error.errors?.[0]?.message ||
+        "Validation failed";
+      return res.status(400).json({
+        error: firstError,
+        details: parseResult.error.flatten?.().fieldErrors || {},
+      });
+    }
+
     const {
       firstName,
       lastName,
@@ -98,43 +120,78 @@ export const createEmployee = async (req, res) => {
       password,
       role,
       bio,
+      profile_img,
       shiftHours,
-    } = req.body;
+      employmentStatus,
+    } = parseResult.data;
 
-    if (!email || !password || !firstName || !lastName) {
-      return res.status(400).json({ error: "Missing required fields" });
+    const normalizedEmail = email.toLowerCase().trim();
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already registered" });
     }
 
     const hashed = await bcrypt.hash(password, 10);
     const user = await User.create({
-      email,
+      email: normalizedEmail,
       password: hashed,
-      role: role || "EMPLOYEE",
+      role: role || UserRole.EMPLOYEE,
     });
 
     const employee = await Employee.create({
       userId: user._id,
       firstName,
       lastName,
-      email,
+      email: normalizedEmail,
       phone,
       position,
-      department: department,
-      basicSalary: Number(basicSalary) || 0,
-      allowances: Number(allowances) || 0,
-      deductions: Number(deductions) || 0,
+      department,
+      basicSalary,
+      allowances,
+      deductions,
       joinDate: new Date(joinDate),
-      bio: bio || "",
-      shiftHours: Number(shiftHours) || 0,
+      bio,
+      profile_img,
+      shiftHours,
+      employmentStatus,
     });
 
-    return res.status(201).json({ success: true, employee });
+    // Send welcome email with login credentials
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    let emailSent = false;
+    let emailError = null;
+
+    try {
+      await sendEmail({
+        to: normalizedEmail,
+        subject: "Welcome to E Building HRMS - Your Login Credentials",
+        body: getWelcomeCredentialsEmail({
+          firstName: employee.firstName,
+          lastName: employee.lastName,
+          email: normalizedEmail,
+          password: password,
+          loginUrl: `${frontendUrl}/login`,
+          position: employee.position,
+        }),
+      });
+      emailSent = true;
+    } catch (err) {
+      emailError = err.message;
+      console.error(`Failed to send credentials email to ${normalizedEmail}:`, err);
+    }
+
+    return res.status(201).json({
+      success: true,
+      employee,
+      emailSent,
+      ...(emailError ? { emailWarning: "Employee created, but credential email could not be sent. Check SMTP settings." } : {}),
+    });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(400).json({ error: "Email already exists" });
     }
     console.error("Create employee error:", error);
-    return res.status(500).json({ error: "Failed to create employee" });
+    return res.status(500).json({ error: error.message || "Failed to create employee" });
   }
 };
 
@@ -193,7 +250,7 @@ export const deleteEmployee = async (req, res) => {
     if (!employee) return res.status(404).json({ error: "Employee not found" });
 
     employee.isDeleted = true;
-    employee.employmentStatus = "INACTIVE";
+    employee.employmentStatus = EmploymentStatus.INACTIVE;
     await employee.save();
     return res.json({ success: true });
   } catch (error) {

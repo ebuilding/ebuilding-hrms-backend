@@ -6,15 +6,11 @@ import {
   updateEmployee,
   getEmployeeById,
 } from "../controllers/employeeController.js";
-import {
-  protect,
-  protectAdmin,
-  protectAdminOrSecurity,
-} from "../middleware/auth.js";
+import { protect, protectAdmin } from "../middleware/auth.js";
 
 const employeesRouter = Router();
 
-employeesRouter.get("/", protect, protectAdminOrSecurity, getEmployees);
+employeesRouter.get("/", protect, protectAdmin, getEmployees);
 employeesRouter.get("/:id", protect, protectAdmin, getEmployeeById);
 employeesRouter.post("/", protect, protectAdmin, createEmployee);
 employeesRouter.put("/:id", protect, protectAdmin, updateEmployee);
