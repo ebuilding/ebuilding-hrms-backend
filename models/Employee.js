@@ -1,4 +1,10 @@
 import mongoose from "mongoose";
+import {
+  EmploymentStatus,
+  ApprovalStatus,
+  Gender,
+  MaritalStatus,
+} from "../constants/enums.js";
 
 const employeeSchema = new mongoose.Schema(
   {
@@ -19,9 +25,27 @@ const employeeSchema = new mongoose.Schema(
     deductions: { type: Number, default: 0 },
     employmentStatus: {
       type: String,
-      enum: ["ACTIVE", "INACTIVE"],
-      default: "ACTIVE",
+      enum: Object.values(EmploymentStatus),
+      default: EmploymentStatus.ACTIVE,
     },
+    approvalStatus: {
+      type: String,
+      enum: Object.values(ApprovalStatus),
+      default: ApprovalStatus.APPROVED,
+      index: true,
+    },
+    inviteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RegistrationInvite",
+      default: null,
+    },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    approvedAt: { type: Date, default: null },
+    rejectionReason: { type: String, default: "" },
     joinDate: { type: Date, required: true },
     isDeleted: { type: Boolean, default: false },
     bio: { type: String, default: "" },
@@ -47,13 +71,13 @@ const employeeSchema = new mongoose.Schema(
       dob: { type: Date },
       gender: {
         type: String,
-        enum: ["MALE", "FEMALE", "OTHER"],
-        default: "MALE",
+        enum: Object.values(Gender),
+        default: Gender.MALE,
       },
       maritalStatus: {
         type: String,
-        enum: ["SINGLE", "MARRIED", "DIVORCED", "WIDOWED"],
-        default: "SINGLE",
+        enum: Object.values(MaritalStatus),
+        default: MaritalStatus.SINGLE,
       },
       address: {
         resident: { type: String, default: "" },

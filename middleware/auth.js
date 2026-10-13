@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { UserRole } from "../constants/enums.js";
 
 export const protect = (req, res, next) => {
   try {
@@ -20,15 +21,13 @@ export const protect = (req, res, next) => {
 };
 
 export const protectAdmin = (req, res, next) => {
-  if (req?.session?.role !== "ADMIN") {
+  if (req?.session?.role !== UserRole.ADMIN) {
     return res.status(403).json({ error: "Admin access required" });
   }
   next();
 };
 
-export const protectAdminOrSecurity = (req, res, next) => {
-  if (req?.session?.role !== "ADMIN" && req?.session?.role !== "SECURITY") {
-    return res.status(403).json({ error: "Access denied" });
-  }
-  next();
+export default {
+  protect,
+  protectAdmin,
 };

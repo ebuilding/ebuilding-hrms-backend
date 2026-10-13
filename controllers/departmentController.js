@@ -23,6 +23,16 @@ export const getDepartments = async (req, res) => {
   }
 };
 
+// Get departments for public registration (no auth required)
+export const getPublicDepartments = async (req, res) => {
+  try {
+    const departments = await Department.find().select("_id name").sort({ name: 1 });
+    res.json({ data: departments });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // Create a department
 export const createDepartment = async (req, res) => {
   try {

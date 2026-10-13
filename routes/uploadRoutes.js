@@ -30,6 +30,23 @@ router.post(
   },
 );
 
+// POST /api/upload/public (for self-registration profile photo)
+router.post(
+  "/public",
+  upload.single("document"),
+  (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    res.json({
+      success: true,
+      url: req.file.path,
+      name: req.file.originalname,
+    });
+  },
+);
+
 // DELETE /api/upload/document
 router.delete("/document", protect, protectAdmin, async (req, res) => {
   try {

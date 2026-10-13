@@ -8,6 +8,7 @@ import {
   getCompOffLabelForDate,
 } from "../utils/compOff.js";
 import ExcelJS from "exceljs";
+import { UserRole } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -46,10 +47,7 @@ export const clockInOut = async (req, res) => {
     const session = req.session;
     let employee;
 
-    if (
-      req.body?.employeeId &&
-      (session.role === "ADMIN" || session.role === "SECURITY")
-    ) {
+    if (req.body?.employeeId && session.role === UserRole.ADMIN) {
       employee = await Employee.findById(req.body.employeeId);
     } else {
       employee = await Employee.findOne({ userId: session.userId });
@@ -199,7 +197,7 @@ export const getAttendance = async (req, res) => {
     const { month, employeeId } = req.body; // format: "YYYY-MM"
 
     let employee;
-    if (employeeId && session.role === "ADMIN") {
+    if (employeeId && session.role === UserRole.ADMIN) {
       employee = await Employee.findById(employeeId);
     } else {
       employee = await Employee.findOne({ userId: session.userId });

@@ -17,6 +17,7 @@ import uploadRouter from "./routes/uploadRoutes.js";
 import taskSheetRouter from "./routes/taskSheetRoutes.js";
 import leavePolicyRouter from "./routes/leavePolicyRoutes.js";
 import documentRouter from "./routes/documentRoutes.js";
+import inviteRouter from "./routes/inviteRoutes.js";
 
 import { serve } from "inngest/express";
 import { inngest, functions } from "./inngest/index.js";
@@ -33,6 +34,7 @@ app.use("/uploads", express.static("uploads"));
 // Routes
 app.get("/", (req, res) => res.send("Server is running"));
 app.use("/api/auth", authRouter);
+app.use("/api/invites", inviteRouter);
 app.use("/api/employees", employeesRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/attendance", attendanceRouter);
