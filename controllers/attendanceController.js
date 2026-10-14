@@ -8,7 +8,12 @@ import {
   getCompOffLabelForDate,
 } from "../utils/compOff.js";
 import ExcelJS from "exceljs";
-import { UserRole, AttendanceStatus } from "../constants/enums.js";
+import {
+  UserRole,
+  AttendanceStatus,
+  DayType,
+  CompOffType,
+} from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -115,7 +120,7 @@ export const clockInOut = async (req, res) => {
         (openRecord.checkOut - openRecord.checkIn) / (1000 * 60 * 60);
       openRecord.workingHours = parseFloat(duration.toFixed(2));
       openRecord.dayType =
-        openRecord.workingHours >= 8 ? "Full Day" : "Half Day";
+        openRecord.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
       await openRecord.save();
       // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       return res.json({ success: true, type: "CHECK_OUT", data: openRecord });
@@ -136,7 +141,7 @@ export const clockInOut = async (req, res) => {
         employeeId: employee._id,
         date: todayStart,
         checkIn: now,
-        status: "PRESENT",
+        status: AttendanceStatus.PRESENT,
         ...(compoffLabel ? { compoffFor: compoffLabel } : {}),
       });
 
@@ -150,14 +155,16 @@ export const clockInOut = async (req, res) => {
 
       return res.json({ success: true, type: "CHECK_IN", data: attendance });
     } else if (
-      (existing.status === "HOLIDAY" || existing.status === "WEEK_OFF") &&
+      (existing.status === AttendanceStatus.HOLIDAY || existing.status === AttendanceStatus.WEEK_OFF) &&
       !existing.checkIn
     ) {
       const originalStatus = existing.status;
       existing.checkIn = now;
-      existing.status = "PRESENT";
+      existing.status = AttendanceStatus.PRESENT;
       existing.compoffFor =
-        originalStatus === "HOLIDAY" ? "Holiday" : "Week Off";
+        originalStatus === AttendanceStatus.HOLIDAY
+          ? CompOffType.HOLIDAY
+          : CompOffType.WEEK_OFF;
       await existing.save();
 
       await inngest.send({
@@ -354,8 +361,8 @@ export const adminClockInOut = async (req, res) => {
 
     attendance.checkIn = checkInTime;
     attendance.checkOut = checkOutTime;
-    attendance.status = status || "PRESENT";
-    attendance.dayType = dayType || "Full Day";
+    attendance.status = status || AttendanceStatus.PRESENT;
+    attendance.dayType = dayType || DayType.FULL_DAY;
     attendance.compoffFor = compoffFor || "";
     attendance.updatedBy = req.session.email;
     attendance.adminUpdatedAt = new Date();

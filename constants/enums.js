@@ -84,6 +84,12 @@ export const DayType = Object.freeze({
   HALF_DAY: "Half Day",
 });
 
+export const CompOffType = Object.freeze({
+  WEEK_OFF: "Week Off",
+  HOLIDAY: "Holiday",
+  OTHER: "Other",
+});
+
 export default {
   UserRole,
   ApprovalStatus,
@@ -94,7 +100,9 @@ export default {
   CandidateFilterStatus,
   LeaveType,
   LeaveStatus,
+  CompOffRequestStatus,
   HalfDayType,
   AttendanceStatus,
   DayType,
+  CompOffType,
 };

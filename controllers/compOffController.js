@@ -2,7 +2,12 @@ import moment from "moment-timezone";
 import CompOffRequest from "../models/CompOffRequest.js";
 import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
-import { UserRole, CompOffRequestStatus } from "../constants/enums.js";
+import {
+  UserRole,
+  CompOffRequestStatus,
+  DayType,
+  CompOffType,
+} from "../constants/enums.js";
 import { creditCompOffForAttendance } from "../utils/compOff.js";
 
 const TZ = "Asia/Kolkata";
@@ -22,7 +27,7 @@ export const getEligibleDays = async (req, res) => {
     // 1. Fetch all attendance records on non-working days with completed checkIn/checkOut
     const workedDays = await Attendance.find({
       employeeId: employee._id,
-      compoffFor: { $in: ["Week Off", "Holiday", "Other"] },
+      compoffFor: { $in: Object.values(CompOffType) },
       checkIn: { $ne: null },
       checkOut: { $ne: null },
       workingHours: { $gte: 4 },
@@ -51,7 +56,7 @@ export const getEligibleDays = async (req, res) => {
         const dayName = moment(day.date).tz(TZ).format("dddd");
         const hours = day.workingHours || 0;
         const creditedDays = hours >= 8 ? 1 : 0.5;
-        const dayType = creditedDays === 1 ? "Full Day" : "Half Day";
+        const dayType = creditedDays === 1 ? DayType.FULL_DAY : DayType.HALF_DAY;
 
         return {
           attendanceId: day._id,
@@ -63,8 +68,8 @@ export const getEligibleDays = async (req, res) => {
           workingHours: hours,
           dayType,
           creditedDays,
-          compoffFor: day.compoffFor || "Week Off",
-          displayLabel: `${dateFormatted} - ${dayName} (${day.compoffFor || "Week Off"}) • ${hours} hrs → ${creditedDays} Day Credit`,
+          compoffFor: day.compoffFor || CompOffType.WEEK_OFF,
+          displayLabel: `${dateFormatted} - ${dayName} (${day.compoffFor || CompOffType.WEEK_OFF}) • ${hours} hrs → ${creditedDays} Day Credit`,
         };
       });
 
@@ -133,7 +138,7 @@ export const requestCompOff = async (req, res) => {
 
     const hours = attendance.workingHours || 0;
     const creditedDays = hours >= 8 ? 1 : 0.5;
-    const dayType = creditedDays === 1 ? "Full Day" : "Half Day";
+    const dayType = creditedDays === 1 ? DayType.FULL_DAY : DayType.HALF_DAY;
 
     const compOffReq = await CompOffRequest.create({
       employeeId: employee._id,
@@ -142,7 +147,7 @@ export const requestCompOff = async (req, res) => {
       workedHours: hours,
       dayType,
       creditedDays,
-      compoffFor: attendance.compoffFor || "Week Off",
+      compoffFor: attendance.compoffFor || CompOffType.WEEK_OFF,
       reason: reason.trim(),
       status: CompOffRequestStatus.PENDING,
     });

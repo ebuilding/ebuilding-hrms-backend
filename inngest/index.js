@@ -5,6 +5,7 @@ import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import sendEmail from "../config/nodemailer.js";
 import { creditCompOffForAttendance } from "../utils/compOff.js";
+import { DayType, AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -241,8 +242,8 @@ const autoCheckOut = inngest.createFunction(
           (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60);
         attendance.workingHours = parseFloat(duration.toFixed(2));
         attendance.dayType =
-          attendance.workingHours >= 8 ? "Full Day" : "Half Day";
-        attendance.status = "PRESENT";
+          attendance.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+        attendance.status = AttendanceStatus.PRESENT;
         attendance.updatedBy = "System";
         attendance.adminUpdatedAt = new Date();
         await attendance.save();

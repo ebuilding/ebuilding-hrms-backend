@@ -5,6 +5,7 @@ import Config from "../models/Config.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import { isWeekOffDate } from "./weekOff.js";
 import { findHolidayForDate } from "./holiday.js";
+import { DayType, CompOffType } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -20,8 +21,8 @@ export const getCompOffCreditDays = (attendance) => {
   if (!label || (typeof label === "string" && !label.trim())) return 0;
   if (!attendance.checkIn || !attendance.checkOut) return 0;
 
-  if (attendance.dayType === "Half Day") return 0.5;
-  if (attendance.dayType === "Full Day") return 1;
+  if (attendance.dayType === DayType.HALF_DAY) return 0.5;
+  if (attendance.dayType === DayType.FULL_DAY) return 1;
 
   const hours = attendance.workingHours ?? 0;
   if (hours >= 8) return 1;
@@ -32,10 +33,10 @@ export const getCompOffCreditDays = (attendance) => {
 export const getCompOffLabelForDate = async (date) => {
   const dayStart = moment(date).tz(TZ).startOf("day").toDate();
   const holiday = await findHolidayForDate(dayStart, TZ);
-  if (holiday) return "Holiday";
+  if (holiday) return CompOffType.HOLIDAY;
 
   const config = await Config.findOne({ key: "weekOffDays" }).lean();
-  if (isWeekOffDate(dayStart, config?.value, TZ)) return "Week Off";
+  if (isWeekOffDate(dayStart, config?.value, TZ)) return CompOffType.WEEK_OFF;
 
   return null;
 };

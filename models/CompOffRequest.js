@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
-import { CompOffRequestStatus } from "../constants/enums.js";
+import {
+  CompOffRequestStatus,
+  DayType,
+  CompOffType,
+} from "../constants/enums.js";
 
 const compOffRequestSchema = new mongoose.Schema(
   {
@@ -25,7 +29,7 @@ const compOffRequestSchema = new mongoose.Schema(
     },
     dayType: {
       type: String,
-      enum: ["Full Day", "Half Day"],
+      enum: Object.values(DayType),
       required: true,
     },
     creditedDays: {
@@ -34,8 +38,8 @@ const compOffRequestSchema = new mongoose.Schema(
     },
     compoffFor: {
       type: String,
-      enum: ["Week Off", "Holiday", "Other"],
-      default: "Week Off",
+      enum: Object.values(CompOffType),
+      default: CompOffType.WEEK_OFF,
     },
     reason: {
       type: String,

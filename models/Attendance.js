@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { AttendanceStatus, DayType } from "../constants/enums.js";
 
 const attendanceSchema = new mongoose.Schema(
   {
@@ -12,20 +13,13 @@ const attendanceSchema = new mongoose.Schema(
     checkOut: { type: Date, default: null },
     status: {
       type: String,
-      enum: [
-        "PRESENT",
-        "LEAVE",
-        "NOT_MARKED",
-        "HOLIDAY",
-        "WEEK_OFF",
-        "HALF_DAY",
-      ],
-      default: "NOT_MARKED",
+      enum: Object.values(AttendanceStatus),
+      default: AttendanceStatus.NOT_MARKED,
     },
     workingHours: { type: Number, default: null },
     dayType: {
       type: String,
-      enum: ["Full Day", "Half Day", null],
+      enum: [...Object.values(DayType), null],
       default: null,
     },
     compoffFor: { type: String, default: null },
