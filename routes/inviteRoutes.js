@@ -5,6 +5,8 @@ import {
   deleteInvite,
   toggleInviteStatus,
   validateInvite,
+  validateCorrectionToken,
+  resubmitCorrection,
   approveSubmission,
   rejectSubmission,
   revokeSubmission,
@@ -13,8 +15,10 @@ import { protect, protectAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// Public route to validate token when employee visits /register?token=...
+// Public routes for registration and candidate corrections
 router.get("/validate/:token", validateInvite);
+router.get("/correction/validate/:token", validateCorrectionToken);
+router.put("/correction/resubmit/:token", resubmitCorrection);
 
 // Admin-only routes
 router.use(protect);

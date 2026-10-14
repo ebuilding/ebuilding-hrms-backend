@@ -318,7 +318,11 @@ export const processPaidLeaveGrants = async (
 
 export const reservePaidLeave = async (leave, employee, workingDates) => {
   const policy = await getPaidLeavePolicy();
-  if (!policy) throw new Error("The admin has not configured paid leave yet");
+  if (!policy) {
+    throw new Error(
+      "Paid leave policy has not been configured by the admin yet. You can apply for Unpaid Leave instead.",
+    );
+  }
 
   await processPaidLeaveGrants(employee._id);
   const currentEmployee = await Employee.findById(employee._id).lean();

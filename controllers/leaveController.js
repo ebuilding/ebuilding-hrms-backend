@@ -2,6 +2,7 @@ import moment from "moment-timezone";
 import { inngest } from "../inngest/index.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
+import LeavePolicy from "../models/LeavePolicy.js";
 import Attendance from "../models/Attendance.js";
 import { getWorkingLeaveDays } from "../utils/leaveDays.js";
 import {
@@ -10,6 +11,7 @@ import {
   reservePaidLeave,
   settlePaidLeaveApproval,
 } from "../utils/paidLeave.js";
+import { LeaveType, LeaveStatus, DayType, AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -46,8 +48,8 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
     });
 
     if (attendanceRecord) {
-      attendanceRecord.status = "LEAVE";
-      attendanceRecord.dayType = leave.isHalfDay ? "Half Day" : "Full Day";
+      attendanceRecord.status = AttendanceStatus.LEAVE;
+      attendanceRecord.dayType = leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY;
       attendanceRecord.checkIn = null;
       attendanceRecord.checkOut = null;
       attendanceRecord.workingHours = null;
@@ -58,8 +60,8 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
       await Attendance.create({
         employeeId: leave.employeeId,
         date: dateStart,
-        status: "LEAVE",
-        dayType: leave.isHalfDay ? "Half Day" : "Full Day",
+        status: AttendanceStatus.LEAVE,
+        dayType: leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY,
         checkIn: null,
         checkOut: null,
         workingHours: null,
@@ -120,7 +122,7 @@ export const createLeave = async (req, res) => {
         .json({ error: "End date cannot be before start date" });
     }
 
-    if (!["PAID", "UNPAID", "COMP_OFF"].includes(type)) {
+    if (![LeaveType.PAID, LeaveType.UNPAID, LeaveType.COMP_OFF].includes(type)) {
       return res.status(400).json({ error: "Invalid leave type" });
     }
 
@@ -135,7 +137,7 @@ export const createLeave = async (req, res) => {
         .json({ error: "Selected dates contain no working days" });
     }
 
-    if (type === "COMP_OFF") {
+    if (type === LeaveType.COMP_OFF) {
       if ((employee.leaveBalance?.compOff || 0) < chargedDays) {
         return res.status(400).json({ error: "Insufficient comp-off balance" });
       }
@@ -151,10 +153,10 @@ export const createLeave = async (req, res) => {
       workingDates,
       chargedDays,
       reason,
-      status: "PENDING",
+      status: LeaveStatus.PENDING,
     });
 
-    if (type === "PAID") {
+    if (type === LeaveType.PAID) {
       try {
         await reservePaidLeave(leave, employee, workingDates);
       } catch (error) {
@@ -185,6 +187,9 @@ export const getLeaves = async (req, res) => {
   try {
     const session = req.session;
     const isAdmin = session.role === "ADMIN";
+    const policy = await LeavePolicy.findOne({ scope: "COMPANY" }).lean();
+    const hasPaidPolicy = Boolean(policy);
+
     if (isAdmin) {
       const status = req.query.status;
       const where = status ? { status } : {};
@@ -205,7 +210,7 @@ export const getLeaves = async (req, res) => {
           employeeId: l.employeeId?._id?.toString(),
         };
       });
-      return res.json({ data });
+      return res.json({ data, hasPaidPolicy });
     } else {
       let employee = await Employee.findOne({
         userId: session.userId,
@@ -228,6 +233,7 @@ export const getLeaves = async (req, res) => {
       return res.json({
         data: leaves,
         employee: { ...employee, id: employee._id.toString() },
+        hasPaidPolicy,
       });
     }
   } catch (error) {

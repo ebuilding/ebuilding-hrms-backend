@@ -5,6 +5,7 @@ import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import sendEmail from "../config/nodemailer.js";
 import { creditCompOffForAttendance } from "../utils/compOff.js";
+import { DayType, AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -226,16 +227,27 @@ const autoCheckOut = inngest.createFunction(
 
       attendance = await Attendance.findById(attendanceId);
       if (!attendance?.checkOut) {
-        attendance.checkOut = moment(attendance.checkIn)
-          .add(9, "hours")
-          .toDate();
-        attendance.workingHours = 9;
-        attendance.dayType = "Full Day";
-        attendance.status = "PRESENT";
+        const checkInMoment = moment(attendance.checkIn).tz(TZ);
+        let checkOutMoment = checkInMoment
+          .clone()
+          .set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+
+        // If check-in occurred at or after 7:00 PM, set checkout to 7:00 PM next day
+        if (checkOutMoment.isSameOrBefore(checkInMoment)) {
+          checkOutMoment.add(1, "day");
+        }
+
+        attendance.checkOut = checkOutMoment.toDate();
+        const duration =
+          (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60);
+        attendance.workingHours = parseFloat(duration.toFixed(2));
+        attendance.dayType =
+          attendance.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+        attendance.status = AttendanceStatus.PRESENT;
         attendance.updatedBy = "System";
         attendance.adminUpdatedAt = new Date();
         await attendance.save();
-        await creditCompOffForAttendance(attendance);
+        // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       }
     }
   },

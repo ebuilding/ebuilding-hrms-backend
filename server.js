@@ -18,6 +18,7 @@ import taskSheetRouter from "./routes/taskSheetRoutes.js";
 import leavePolicyRouter from "./routes/leavePolicyRoutes.js";
 import documentRouter from "./routes/documentRoutes.js";
 import inviteRouter from "./routes/inviteRoutes.js";
+import compOffRouter from "./routes/compOffRoutes.js";
 
 import { serve } from "inngest/express";
 import { inngest, functions } from "./inngest/index.js";
@@ -25,6 +26,9 @@ import { startAttendanceCron } from "./cron/attendanceCron.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Trust reverse proxy headers (Nginx on EC2, Cloudflare, AWS ALB, etc.)
+app.set("trust proxy", true);
 
 // Middleware
 app.use(cors());
@@ -48,6 +52,7 @@ app.use("/api/upload", uploadRouter);
 app.use("/api/tasksheet", taskSheetRouter);
 app.use("/api/leave-policy", leavePolicyRouter);
 app.use("/api/documents", documentRouter);
+app.use("/api/compoff", compOffRouter);
 
 app.use("/api/inngest", serve({ client: inngest, functions }));
 
