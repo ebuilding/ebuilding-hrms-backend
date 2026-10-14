@@ -6,6 +6,7 @@ import LeaveApplication from "../models/LeaveApplication.js";
 import Payslip from "../models/Payslip.js";
 import Holiday from "../models/Holiday.js";
 import { processPaidLeaveGrants } from "../utils/paidLeave.js";
+import { AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -31,7 +32,7 @@ export const getDashboard = async (req, res) => {
         Employee.countDocuments({ isDeleted: { $ne: true } }),
         Attendance.countDocuments({
           date: { $gte: todayStart, $lte: todayEnd },
-          status: { $in: ["PRESENT", "HALF_DAY"] },
+          status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
         }),
         LeaveApplication.countDocuments({ status: "PENDING" }),
         Department.countDocuments(),
@@ -91,7 +92,7 @@ export const getDashboard = async (req, res) => {
           const dateEnd = mDate.clone().endOf("day").toDate();
           const count = await Attendance.countDocuments({
             date: { $gte: dateStart, $lte: dateEnd },
-            status: { $in: ["PRESENT", "HALF_DAY"] },
+            status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
           });
           return {
             date: mDate.format("MMM DD"),
@@ -164,7 +165,7 @@ export const getDashboard = async (req, res) => {
         Attendance.countDocuments({
           employeeId: employee._id,
           date: { $gte: startOfMonth, $lte: endOfMonth },
-          status: { $in: ["PRESENT", "HALF_DAY"] },
+          status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
         }),
         LeaveApplication.countDocuments({
           employeeId: employee._id,
@@ -190,7 +191,7 @@ export const getDashboard = async (req, res) => {
           $match: {
             employeeId: employee._id,
             date: { $gte: startOfMonth, $lte: endOfMonth },
-            status: { $in: ["PRESENT", "HALF_DAY"] },
+            status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
           },
         },
         {

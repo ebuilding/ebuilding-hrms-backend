@@ -8,7 +8,7 @@ import {
   getCompOffLabelForDate,
 } from "../utils/compOff.js";
 import ExcelJS from "exceljs";
-import { UserRole } from "../constants/enums.js";
+import { UserRole, AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -533,7 +533,9 @@ export const exportMonthlyAttendance = async (req, res) => {
       const empAttendances = attendanceByEmployee[emp._id.toString()] || [];
 
       const totalDaysPresent = empAttendances.filter(
-        (a) => a.status === "PRESENT" || a.status === "HALF_DAY",
+        (a) =>
+          a.status === AttendanceStatus.PRESENT ||
+          a.status === AttendanceStatus.HALF_DAY,
       ).length;
       const totalWorkingHours = empAttendances.reduce(
         (sum, a) => sum + (a.workingHours || 0),

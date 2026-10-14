@@ -26,6 +26,9 @@ import { startAttendanceCron } from "./cron/attendanceCron.js";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Trust reverse proxy headers (Nginx on EC2, Cloudflare, AWS ALB, etc.)
+app.set("trust proxy", true);
+
 // Middleware
 app.use(cors());
 app.use(express.json());

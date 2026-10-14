@@ -329,3 +329,76 @@ export const getApprovalConfirmedEmail = ({
 
   return getEmailTemplate(content, "Registration Approved");
 };
+
+export const getRegistrationCorrectionEmail = ({
+  firstName,
+  lastName,
+  reason,
+  correctionUrl,
+  expiresHours = 168,
+}) => {
+  const content = `
+<h2 style="
+  margin:0 0 16px;
+  font-size:24px;
+  line-height:1.3;
+  color:#111827;
+  font-weight:700;
+">
+  Action Required: Update Your Application, ${firstName}
+</h2>
+
+<p style="
+  margin:0 0 20px;
+  color:#4b5563;
+  font-size:15px;
+  line-height:1.8;
+">
+  The company administrator has reviewed your self-registration for <strong>E Building HRMS</strong> and requested corrections before your account can be approved.
+</p>
+
+<div style="
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  border-left:4px solid #ea580c;
+  border-radius:12px;
+  padding:18px 20px;
+  margin:24px 0;
+">
+  <div style="font-size:13px; font-weight:700; color:#9a3412; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">
+    Reason / Changes Requested by Administrator:
+  </div>
+  <div style="font-size:15px; color:#7c2d12; line-height:1.6; font-weight:500;">
+    "${reason}"
+  </div>
+</div>
+
+<p style="color:#4b5563; font-size:14px; line-height:1.7;">
+  Please click the button below to review your pre-filled information, make the necessary corrections, and resubmit your application.
+</p>
+
+<div style="text-align:center; margin:32px 0;">
+  <a href="${correctionUrl}"
+    style="
+      display:inline-block;
+      background:#811c50;
+      color:#ffffff;
+      text-decoration:none;
+      padding:14px 32px;
+      border-radius:12px;
+      font-size:15px;
+      font-weight:600;
+      box-shadow:0 4px 12px rgba(129, 28, 80, 0.25);
+    ">
+    Review &amp; Correct Application →
+  </a>
+</div>
+
+<p style="color:#94a3b8; font-size:12px; line-height:1.6; text-align:center;">
+  This secure correction link will remain valid for ${expiresHours} hours (${Math.round(expiresHours / 24)} days).
+  If you believe this message was sent in error, please contact your administrator.
+</p>
+`;
+
+  return getEmailTemplate(content, "Changes Requested on Registration");
+};

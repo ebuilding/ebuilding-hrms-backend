@@ -129,10 +129,25 @@ export const signDocument = async (req, res) => {
     if (!ack) return res.status(404).json({ error: "Acknowledgment not found" });
     if (ack.status === "SIGNED") return res.status(400).json({ error: "Already signed" });
 
+    // Extract real client IP behind reverse proxies (Nginx on EC2, Cloudflare, Load Balancers)
+    const forwarded = req.headers["x-forwarded-for"];
+    let clientIp = forwarded
+      ? forwarded.split(",")[0].trim()
+      : req.headers["x-real-ip"] ||
+        req.headers["cf-connecting-ip"] ||
+        req.ip ||
+        req.socket?.remoteAddress ||
+        req.connection?.remoteAddress ||
+        "Unknown";
+
+    if (typeof clientIp === "string" && clientIp.startsWith("::ffff:")) {
+      clientIp = clientIp.replace("::ffff:", "");
+    }
+
     ack.status = "SIGNED";
     ack.signatureText = signatureText;
     ack.signedAt = new Date();
-    ack.ipAddress = req.ip || req.connection.remoteAddress;
+    ack.ipAddress = clientIp;
     await ack.save();
 
     return res.json({ message: "Document signed successfully", data: ack });

@@ -46,6 +46,8 @@ const employeeSchema = new mongoose.Schema(
     },
     approvedAt: { type: Date, default: null },
     rejectionReason: { type: String, default: "" },
+    correctionToken: { type: String, default: null, index: true },
+    correctionExpiresAt: { type: Date, default: null },
     joinDate: { type: Date, required: true },
     isDeleted: { type: Boolean, default: false },
     bio: { type: String, default: "" },

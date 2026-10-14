@@ -47,6 +47,37 @@ export const CandidateFilterStatus = Object.freeze({
   REVOKED: "REVOKED",
 });
 
+export const LeaveType = Object.freeze({
+  PAID: "PAID",
+  UNPAID: "UNPAID",
+  COMP_OFF: "COMP_OFF",
+});
+
+export const LeaveStatus = Object.freeze({
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+});
+
+export const HalfDayType = Object.freeze({
+  FIRST_HALF: "FIRST_HALF",
+  SECOND_HALF: "SECOND_HALF",
+});
+
+export const AttendanceStatus = Object.freeze({
+  PRESENT: "PRESENT",
+  LEAVE: "LEAVE",
+  NOT_MARKED: "NOT_MARKED",
+  HOLIDAY: "HOLIDAY",
+  WEEK_OFF: "WEEK_OFF",
+  HALF_DAY: "HALF_DAY",
+});
+
+export const DayType = Object.freeze({
+  FULL_DAY: "Full Day",
+  HALF_DAY: "Half Day",
+});
+
 export default {
   UserRole,
   ApprovalStatus,
@@ -55,4 +86,9 @@ export default {
   MaritalStatus,
   InviteFilterStatus,
   CandidateFilterStatus,
+  LeaveType,
+  LeaveStatus,
+  HalfDayType,
+  AttendanceStatus,
+  DayType,
 };
