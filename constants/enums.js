@@ -59,6 +59,12 @@ export const LeaveStatus = Object.freeze({
   REJECTED: "REJECTED",
 });
 
+export const CompOffRequestStatus = Object.freeze({
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+});
+
 export const HalfDayType = Object.freeze({
   FIRST_HALF: "FIRST_HALF",
   SECOND_HALF: "SECOND_HALF",

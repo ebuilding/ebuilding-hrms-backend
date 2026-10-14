@@ -246,7 +246,7 @@ const autoCheckOut = inngest.createFunction(
         attendance.updatedBy = "System";
         attendance.adminUpdatedAt = new Date();
         await attendance.save();
-        await creditCompOffForAttendance(attendance);
+        // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       }
     }
   },

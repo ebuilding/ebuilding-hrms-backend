@@ -117,7 +117,7 @@ export const clockInOut = async (req, res) => {
       openRecord.dayType =
         openRecord.workingHours >= 8 ? "Full Day" : "Half Day";
       await openRecord.save();
-      await creditCompOffForAttendance(openRecord);
+      // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       return res.json({ success: true, type: "CHECK_OUT", data: openRecord });
     }
 
@@ -372,9 +372,7 @@ export const adminClockInOut = async (req, res) => {
     }
 
     await attendance.save();
-    if (checkInTime && checkOutTime) {
-      await creditCompOffForAttendance(attendance);
-    }
+    // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
     res.json({ success: true, data: attendance });
   } catch (error) {
     res.status(500).json({ error: error.message });
