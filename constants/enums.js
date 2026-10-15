@@ -90,6 +90,20 @@ export const CompOffType = Object.freeze({
   OTHER: "Other",
 });
 
+export const PasswordResetReason = Object.freeze({
+  MISSING: "missing",
+  INVALID: "invalid",
+  EXPIRED: "expired",
+  SERVER_ERROR: "server_error",
+});
+
+export const PasswordResetConfig = Object.freeze({
+  EXPIRY_MINUTES: 5,
+  COOLDOWN_SECONDS: 60,
+  MAX_REQUESTS_PER_WINDOW: 5,
+  RATE_LIMIT_WINDOW_MINUTES: 15,
+});
+
 export default {
   UserRole,
   ApprovalStatus,
@@ -105,4 +119,7 @@ export default {
   AttendanceStatus,
   DayType,
   CompOffType,
+  PasswordResetReason,
+  PasswordResetConfig,
 };
+

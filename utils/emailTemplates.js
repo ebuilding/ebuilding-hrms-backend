@@ -402,3 +402,111 @@ export const getRegistrationCorrectionEmail = ({
 
   return getEmailTemplate(content, "Changes Requested on Registration");
 };
+
+export const getPasswordResetEmail = ({
+  name = "Team Member",
+  resetLink,
+  expireMinutes = 5,
+}) => {
+  const content = `
+<div style="text-align:center; margin-bottom:24px;">
+  <div style="
+    display:inline-block;
+    width:56px;
+    height:56px;
+    line-height:56px;
+    background:#fdf2f8;
+    color:#811c50;
+    border-radius:50%;
+    font-size:24px;
+    margin-bottom:16px;
+  ">
+    🔑
+  </div>
+  <h2 style="color:#0f172a; margin:0 0 8px 0; font-size:22px; font-weight:700;">Password Reset Request</h2>
+  <p style="color:#64748b; font-size:14px; margin:0;">Follow the link below to set a new password for your account.</p>
+</div>
+
+<p style="color:#334155; font-size:14px; line-height:1.6;">
+  Hello <strong>${name}</strong>,
+</p>
+
+<p style="color:#334155; font-size:14px; line-height:1.6;">
+  We received a request to reset the password associated with your E Building HRMS account. To proceed, click the button below:
+</p>
+
+<div style="text-align:center; margin:32px 0;">
+  <a href="${resetLink}"
+    style="
+      display:inline-block;
+      background:#811c50;
+      color:#ffffff;
+      text-decoration:none;
+      padding:14px 32px;
+      border-radius:12px;
+      font-size:15px;
+      font-weight:600;
+      box-shadow:0 4px 12px rgba(129, 28, 80, 0.25);
+    ">
+    Reset My Password →
+  </a>
+</div>
+
+<div style="background:#fffbeb; border:1px solid #fef3c7; border-radius:12px; padding:16px; margin:24px 0;">
+  <p style="color:#92400e; font-size:13px; font-weight:600; margin:0 0 4px 0;">
+    ⏰ Important Security Notice
+  </p>
+  <p style="color:#b45309; font-size:12px; margin:0; line-height:1.5;">
+    This link is single-use and will automatically <strong>expire in ${expireMinutes} minutes</strong>. If you did not request a password reset, you can safely ignore this email — your account remains completely secure.
+  </p>
+</div>
+
+<p style="color:#94a3b8; font-size:12px; line-height:1.6; word-break:break-all;">
+  If the button above does not work, copy and paste this link into your browser:<br/>
+  <a href="${resetLink}" style="color:#811c50;">${resetLink}</a>
+</p>
+`;
+
+  return getEmailTemplate(content, "Password Reset Request");
+};
+
+export const getPasswordResetSuccessEmail = ({ name = "Team Member" }) => {
+  const content = `
+<div style="text-align:center; margin-bottom:24px;">
+  <div style="
+    display:inline-block;
+    width:56px;
+    height:56px;
+    line-height:56px;
+    background:#ecfdf5;
+    color:#059669;
+    border-radius:50%;
+    font-size:24px;
+    margin-bottom:16px;
+  ">
+    ✅
+  </div>
+  <h2 style="color:#0f172a; margin:0 0 8px 0; font-size:22px; font-weight:700;">Password Changed Successfully</h2>
+  <p style="color:#64748b; font-size:14px; margin:0;">Your account password has been updated.</p>
+</div>
+
+<p style="color:#334155; font-size:14px; line-height:1.6;">
+  Hello <strong>${name}</strong>,
+</p>
+
+<p style="color:#334155; font-size:14px; line-height:1.6;">
+  This is a confirmation that the password for your E Building HRMS account has been successfully changed. You can now use your new password to sign in.
+</p>
+
+<div style="background:#fef2f2; border:1px solid #fee2e2; border-radius:12px; padding:16px; margin:24px 0;">
+  <p style="color:#991b1b; font-size:13px; font-weight:600; margin:0 0 4px 0;">
+    🛡️ Did you not make this change?
+  </p>
+  <p style="color:#b91c1c; font-size:12px; margin:0; line-height:1.5;">
+    If you did not perform this password change, please contact your company administrator immediately to protect your account.
+  </p>
+</div>
+`;
+
+  return getEmailTemplate(content, "Password Changed");
+};

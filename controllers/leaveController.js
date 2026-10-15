@@ -4,6 +4,7 @@ import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import LeavePolicy from "../models/LeavePolicy.js";
 import Attendance from "../models/Attendance.js";
+import Holiday from "../models/Holiday.js";
 import { getWorkingLeaveDays } from "../utils/leaveDays.js";
 import {
   processPaidLeaveGrants,
@@ -110,10 +111,10 @@ export const createLeave = async (req, res) => {
     const start = moment.tz(startDate, "YYYY-MM-DD", TZ).startOf("day");
     const end = moment.tz(endDate, "YYYY-MM-DD", TZ).startOf("day");
 
-    if (start.isSameOrBefore(today) || end.isSameOrBefore(today)) {
+    if (start.isBefore(today) || end.isBefore(today)) {
       return res
         .status(400)
-        .json({ error: "Leave dates must be in the future" });
+        .json({ error: "Leave dates cannot be in the past" });
     }
 
     if (end.isBefore(start)) {
@@ -197,7 +198,7 @@ export const getLeaves = async (req, res) => {
         .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt employeeId")
         .populate({
           path: "employeeId",
-          select: "firstName lastName department",
+          select: "firstName lastName department profile_img position",
           populate: { path: "department", select: "name" },
         })
         .sort({ createdAt: -1 })
@@ -427,3 +428,110 @@ export const getOnLeaveToday = async (req, res) => {
       .json({ error: "Failed to fetch today's leave list" });
   }
 };
+
+// GET /api/leave/calendar?month=YYYY-MM — monthly leave calendar data with leaves and holidays
+export const getLeaveCalendar = async (req, res) => {
+  try {
+    const session = req.session;
+    const isAdmin = session.role === "ADMIN";
+    const requestedMonth = req.query.month; // e.g. "2026-10"
+
+    const baseDate = requestedMonth
+      ? moment.tz(requestedMonth, "YYYY-MM", TZ)
+      : moment.tz(TZ);
+
+    const monthStart = baseDate.clone().startOf("month").startOf("day").toDate();
+    const monthEnd = baseDate.clone().endOf("month").endOf("day").toDate();
+
+    const query = {
+      startDate: { $lte: monthEnd },
+      endDate: { $gte: monthStart },
+    };
+
+    if (!isAdmin) {
+      const employee = await Employee.findOne({ userId: session.userId });
+      if (!employee) return res.status(404).json({ error: "Employee not found" });
+      query.employeeId = employee._id;
+    }
+
+    const [leaves, holidays] = await Promise.all([
+      LeaveApplication.find(query)
+        .populate({
+          path: "employeeId",
+          select: "firstName lastName position profile_img department",
+          populate: { path: "department", select: "name" },
+        })
+        .sort({ startDate: 1 })
+        .lean(),
+      Holiday.find({
+        date: { $gte: monthStart, $lte: monthEnd },
+      })
+        .sort({ date: 1 })
+        .lean(),
+    ]);
+
+    const formattedLeaves = leaves
+      .filter((l) => l.employeeId)
+      .map((l) => ({
+        id: l._id.toString(),
+        employeeId: l.employeeId?._id?.toString(),
+        firstName: l.employeeId?.firstName || "Unknown",
+        lastName: l.employeeId?.lastName || "",
+        fullName: `${l.employeeId?.firstName || ""} ${l.employeeId?.lastName || ""}`.trim(),
+        position: l.employeeId?.position || "Employee",
+        departmentName: l.employeeId?.department?.name || "General",
+        profile_img: l.employeeId?.profile_img || "",
+        type: l.type,
+        status: l.status,
+        isHalfDay: Boolean(l.isHalfDay),
+        halfDayType: l.halfDayType,
+        startDate: moment(l.startDate).tz(TZ).format("YYYY-MM-DD"),
+        endDate: moment(l.endDate).tz(TZ).format("YYYY-MM-DD"),
+        rawStartDate: l.startDate,
+        rawEndDate: l.endDate,
+        workingDates: l.workingDates || [],
+        chargedDays: l.chargedDays ?? 1,
+        reason: l.reason,
+        createdAt: l.createdAt,
+      }));
+
+    // Calculate quick stats for the month
+    const approvedCount = formattedLeaves.filter(
+      (l) => l.status === LeaveStatus.APPROVED,
+    ).length;
+    const pendingCount = formattedLeaves.filter(
+      (l) => l.status === LeaveStatus.PENDING,
+    ).length;
+    const onLeaveTodayCount = formattedLeaves.filter((l) => {
+      if (l.status !== LeaveStatus.APPROVED) return false;
+      const s = moment(l.startDate).tz(TZ).startOf("day");
+      const e = moment(l.endDate).tz(TZ).endOf("day");
+      const t = moment.tz(TZ);
+      return t.isBetween(s, e, null, "[]");
+    }).length;
+
+    const formattedHolidays = holidays.map((h) => ({
+      id: h._id.toString(),
+      name: h.name,
+      date: moment(h.date).tz(TZ).format("YYYY-MM-DD"),
+      year: h.year,
+    }));
+
+    return res.json({
+      success: true,
+      month: baseDate.format("YYYY-MM"),
+      leaves: formattedLeaves,
+      holidays: formattedHolidays,
+      stats: {
+        totalLeaves: formattedLeaves.length,
+        approvedCount,
+        pendingCount,
+        onLeaveTodayCount,
+      },
+    });
+  } catch (error) {
+    console.error("Get Leave Calendar Error:", error);
+    return res.status(500).json({ error: "Failed to fetch leave calendar" });
+  }
+};
+

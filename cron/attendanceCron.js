@@ -172,9 +172,13 @@ export const runAttendanceCron = async () => {
     cronLog.status = "FAILURE";
     cronLog.error = error.message;
   } finally {
-    cronLog.endTime = new Date();
-    await cronLog.save();
-    console.log(`Attendance cron finished. Status: ${cronLog.status}`);
+    try {
+      cronLog.endTime = new Date();
+      await cronLog.save();
+      console.log(`Attendance cron finished. Status: ${cronLog.status}`);
+    } catch (saveErr) {
+      console.error("Failed to save cronLog:", saveErr);
+    }
   }
 };
 
@@ -182,8 +186,12 @@ export const startAttendanceCron = () => {
   cron.schedule(
     SCHEDULE,
     async () => {
-      console.log("Attendance cron starting...");
-      await runAttendanceCron();
+      try {
+        console.log("Attendance cron starting...");
+        await runAttendanceCron();
+      } catch (err) {
+        console.error("Error in attendance cron execution:", err);
+      }
     },
     {
       timezone: TIMEZONE,
