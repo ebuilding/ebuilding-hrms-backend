@@ -6,11 +6,13 @@ import {
   updateLeaveStatus,
   adminCreateLeave,
   getOnLeaveToday,
+  getLeaveCalendar,
 } from "../controllers/leaveController.js";
 
 const leaveRouter = Router();
 
 leaveRouter.get("/today", protect, protectAdmin, getOnLeaveToday);
+leaveRouter.get("/calendar", protect, getLeaveCalendar);
 leaveRouter.post("/", protect, createLeave);
 leaveRouter.post("/admin", protect, protectAdmin, adminCreateLeave);
 leaveRouter.get("/", protect, getLeaves);

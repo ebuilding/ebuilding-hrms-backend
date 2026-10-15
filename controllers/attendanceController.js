@@ -116,8 +116,10 @@ export const clockInOut = async (req, res) => {
 
     if (openRecord) {
       openRecord.checkOut = now;
-      const duration =
-        (openRecord.checkOut - openRecord.checkIn) / (1000 * 60 * 60);
+      const duration = Math.max(
+        0,
+        (openRecord.checkOut - openRecord.checkIn) / (1000 * 60 * 60),
+      );
       openRecord.workingHours = parseFloat(duration.toFixed(2));
       openRecord.dayType =
         openRecord.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
@@ -317,7 +319,7 @@ export const getAttendance = async (req, res) => {
     };
 
     // Ensure totalHours is rounded
-    stats.totalHours = parseFloat(stats.totalHours.toFixed(2));
+    stats.totalHours = parseFloat((stats.totalHours || 0).toFixed(2));
 
     res.json({
       success: true,
@@ -374,7 +376,10 @@ export const adminClockInOut = async (req, res) => {
       }
       // Note: This logic assumes shifts are less than 24 hours.
       // If a shift works more than 24h, this single-day rollover will not accurately capture the total duration.
-      const duration = (checkOutTime - checkInTime) / (1000 * 60 * 60);
+      const duration = Math.max(
+        0,
+        (checkOutTime - checkInTime) / (1000 * 60 * 60),
+      );
       attendance.workingHours = parseFloat(duration.toFixed(2));
     }
 
@@ -447,8 +452,10 @@ export const getAttendanceStats = async (req, res) => {
       let hours = record ? record.workingHours || 0 : 0;
       let isOngoing = false;
       if (record && record.checkIn && !record.checkOut) {
-        hours =
-          (Date.now() - new Date(record.checkIn).getTime()) / (1000 * 60 * 60);
+        hours = Math.max(
+          0,
+          (Date.now() - new Date(record.checkIn).getTime()) / (1000 * 60 * 60),
+        );
         isOngoing = true;
       }
 

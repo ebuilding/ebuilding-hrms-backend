@@ -238,8 +238,10 @@ const autoCheckOut = inngest.createFunction(
         }
 
         attendance.checkOut = checkOutMoment.toDate();
-        const duration =
-          (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60);
+        const duration = Math.max(
+          0,
+          (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60),
+        );
         attendance.workingHours = parseFloat(duration.toFixed(2));
         attendance.dayType =
           attendance.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;

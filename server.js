@@ -56,6 +56,36 @@ app.use("/api/compoff", compOffRouter);
 
 app.use("/api/inngest", serve({ client: inngest, functions }));
 
-await connectDB();
-startAttendanceCron();
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Global error handling middleware (prevents unhandled route crashes)
+app.use((err, req, res, next) => {
+  console.error("Express Error Handler:", err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  return res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Internal server error",
+  });
+});
+
+// Process-level error protection to prevent Node process termination on EC2
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
+const startServer = async () => {
+  try {
+    await connectDB();
+    startAttendanceCron();
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  } catch (err) {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  }
+};
+
+startServer();

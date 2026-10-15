@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { UserRole, EmploymentStatus } from "../constants/enums.js";
+import {
+  UserRole,
+  EmploymentStatus,
+  Gender,
+  MaritalStatus,
+} from "../constants/enums.js";
 
 export const createEmployeeSchema = z.object({
   firstName: z
@@ -207,7 +212,75 @@ export const registerEmployeeSchema = z.object({
   profile_img: z.string().optional().default(""),
 });
 
+export const updateProfileSchema = z.object({
+  bio: z.string().trim().optional(),
+  profile_img: z.string().optional(),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{10}$/, "Mobile number must be a valid 10-digit number")
+    .optional()
+    .or(z.literal("")),
+  personalInfo: z
+    .object({
+      dob: z
+        .string()
+        .or(z.date())
+        .optional()
+        .nullable(),
+      gender: z
+        .enum([Gender.MALE, Gender.FEMALE, Gender.OTHER])
+        .optional()
+        .or(z.literal("")),
+      maritalStatus: z
+        .enum([
+          MaritalStatus.SINGLE,
+          MaritalStatus.MARRIED,
+          MaritalStatus.DIVORCED,
+          MaritalStatus.WIDOWED,
+        ])
+        .optional()
+        .or(z.literal("")),
+      address: z
+        .object({
+          resident: z.string().optional(),
+          permanent: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  bankDetails: z
+    .object({
+      accountHolderName: z.string().optional(),
+      accountNumber: z.string().optional(),
+      bankName: z.string().optional(),
+      ifscCode: z.string().optional(),
+      branchName: z.string().optional(),
+    })
+    .optional(),
+  education: z
+    .array(
+      z.object({
+        degree: z.string().optional(),
+        institution: z.string().optional(),
+        year: z.string().optional(),
+        percentage: z.string().optional(),
+      }),
+    )
+    .optional(),
+  documents: z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        url: z.string().optional(),
+        uploadDate: z.string().or(z.date()).optional(),
+      }),
+    )
+    .optional(),
+});
+
 export default {
   createEmployeeSchema,
   registerEmployeeSchema,
+  updateProfileSchema,
 };
