@@ -13,6 +13,7 @@ import {
   AttendanceStatus,
   DayType,
   CompOffType,
+  ReportExportType,
 } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
@@ -22,13 +23,17 @@ const getTodayDate = () => {
 };
 
 const sendCheckOutEvent = async (attendance) => {
-  await inngest.send({
-    name: "employee/check-out",
-    data: {
-      employeeId: attendance.employeeId,
-      attendanceId: attendance._id,
-    },
-  });
+  try {
+    await inngest.send({
+      name: "employee/check-out",
+      data: {
+        employeeId: attendance.employeeId,
+        attendanceId: attendance._id,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to dispatch employee/check-out event:", error);
+  }
 };
 
 const parseLocalDate = (value) => {
@@ -147,13 +152,7 @@ export const clockInOut = async (req, res) => {
         ...(compoffLabel ? { compoffFor: compoffLabel } : {}),
       });
 
-      await inngest.send({
-        name: "employee/check-out",
-        data: {
-          employeeId: employee._id,
-          attendanceId: attendance._id,
-        },
-      });
+      await sendCheckOutEvent(attendance);
 
       return res.json({ success: true, type: "CHECK_IN", data: attendance });
     } else if (
@@ -169,26 +168,14 @@ export const clockInOut = async (req, res) => {
           : CompOffType.WEEK_OFF;
       await existing.save();
 
-      await inngest.send({
-        name: "employee/check-out",
-        data: {
-          employeeId: employee._id,
-          attendanceId: existing._id,
-        },
-      });
+      await sendCheckOutEvent(existing);
       return res.json({ success: true, type: "CHECK_IN", data: existing });
     } else if (!existing.checkIn) {
       existing.checkIn = now;
-      existing.status = "PRESENT";
+      existing.status = AttendanceStatus.PRESENT;
       await existing.save();
 
-      await inngest.send({
-        name: "employee/check-out",
-        data: {
-          employeeId: employee._id,
-          attendanceId: existing._id,
-        },
-      });
+      await sendCheckOutEvent(existing);
       return res.json({ success: true, type: "CHECK_IN", data: existing });
     } else {
       return res.status(400).json({ error: "Already checked out for today" });
@@ -495,154 +482,389 @@ export const getTodayAttendance = async (req, res) => {
   }
 };
 
-// Admin: Export monthly attendance to Excel
+import { calculateMonthlyReportData } from "../utils/attendanceReport.js";
+
+// Admin: Get monthly report JSON data
+// GET /api/attendance/admin/report?month=YYYY-MM
+export const getMonthlyReportData = async (req, res) => {
+  try {
+    const month = req.query.month || moment().tz(TZ).format("YYYY-MM");
+    const reportData = await calculateMonthlyReportData(month);
+    res.json({ success: true, ...reportData });
+  } catch (error) {
+    console.error("Report Data Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Admin: Export monthly attendance to Excel (Two-tab report: Quick Summary & Detailed Timesheet)
 // POST /api/attendance/admin/export
 export const exportMonthlyAttendance = async (req, res) => {
   try {
-    const { month } = req.body; // format: "YYYY-MM"
+    const { month, exportType = ReportExportType.SUMMARY, employeeId } = req.body; // format: "YYYY-MM"
     if (!month) {
       return res.status(400).json({ error: "Month is required" });
     }
 
-    const [year, monthNum] = month.split("-");
-    const startOfMonth = moment
-      .tz(`${year}-${monthNum}-01`, "YYYY-MM-DD", TZ)
-      .startOf("month")
-      .toDate();
-    const endOfMonth = moment
-      .tz(`${year}-${monthNum}-01`, "YYYY-MM-DD", TZ)
-      .endOf("month")
-      .toDate();
+    const reportData = await calculateMonthlyReportData(month);
+    const { summary, detailed, monthName } = reportData;
 
-    // Fetch all active employees
-    const employees = await Employee.find({ isDeleted: false })
-      .populate("department")
-      .lean();
-
-    // Fetch attendance for the month
-    const attendances = await Attendance.find({
-      date: { $gte: startOfMonth, $lte: endOfMonth },
-    }).lean();
-
-    // Group attendances by employeeId
-    const attendanceByEmployee = attendances.reduce((acc, curr) => {
-      const empId = curr.employeeId.toString();
-      if (!acc[empId]) {
-        acc[empId] = [];
-      }
-      acc[empId].push(curr);
-      return acc;
-    }, {});
-
-    // Fetch config for report calculation
-    const calcConfig = await Config.findOne({ key: "enableReportCalculation" });
-    const enableReportCalculation = calcConfig
-      ? calcConfig.value === true
-      : false;
-
-    // Prepare data for Excel
-    const excelData = employees.map((emp) => {
-      const empAttendances = attendanceByEmployee[emp._id.toString()] || [];
-
-      const totalDaysPresent = empAttendances.filter(
-        (a) =>
-          a.status === AttendanceStatus.PRESENT ||
-          a.status === AttendanceStatus.HALF_DAY,
-      ).length;
-      const totalWorkingHours = empAttendances.reduce(
-        (sum, a) => sum + (a.workingHours || 0),
-        0,
-      );
-
-      const row = {
-        "Employee Name": `${emp.firstName} ${emp.lastName}`,
-        Department: emp.department ? emp.department.name : "N/A",
-        "Shift Hours": emp.shiftHours || "N/A",
-        "Total Days Present": totalDaysPresent,
-        "Total Working Hours": parseFloat(totalWorkingHours.toFixed(2)),
-      };
-
-      if (enableReportCalculation) {
-        row["Calculated Days"] =
-          emp.shiftHours && emp.shiftHours > 0
-            ? parseFloat((totalWorkingHours / emp.shiftHours).toFixed(2))
-            : "N/A";
-      }
-
-      return row;
-    });
-
-    // Create workbook and worksheet
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Monthly Attendance");
+    workbook.creator = "E Building HRMS";
+    workbook.lastModifiedBy = "Admin";
+    workbook.created = new Date();
+    workbook.modified = new Date();
 
-    // Define columns
-    const columns = [
-      { header: "Employee Name", key: "Employee Name", width: 25 },
-      { header: "Department", key: "Department", width: 20 },
-      { header: "Shift Hours", key: "Shift Hours", width: 15 },
-      { header: "Total Days Present", key: "Total Days Present", width: 20 },
-      { header: "Total Working Hours", key: "Total Working Hours", width: 25 },
-    ];
-    if (enableReportCalculation) {
-      columns.push({
-        header: "Calculated Days",
-        key: "Calculated Days",
-        width: 20,
+    const includeSummary =
+      exportType === ReportExportType.SUMMARY ||
+      exportType === ReportExportType.ALL;
+    const includeDetailed =
+      exportType === ReportExportType.DETAILED ||
+      exportType === ReportExportType.ALL;
+
+    // Filter detailed employees if employeeId provided
+    const targetDetailed = employeeId
+      ? detailed.filter((e) => e.employeeId === employeeId)
+      : detailed;
+
+    // ==========================================
+    // TAB 1: QUICK SUMMARY
+    // ==========================================
+    if (includeSummary) {
+      const summarySheet = workbook.addWorksheet("Quick Summary", {
+        views: [{ showGridLines: true }],
       });
-    }
-    worksheet.columns = columns;
 
-    // Add data
-    excelData.forEach((row) => {
-      worksheet.addRow(row);
-    });
+      summarySheet.columns = [
+        { key: "index", width: 8 },
+        { key: "employee", width: 28 },
+        { key: "workingDays", width: 16 },
+        { key: "presentDays", width: 16 },
+        { key: "leave", width: 14 },
+        { key: "notMarked", width: 14 },
+        { key: "hoursLogged", width: 18 },
+        { key: "expectedHours", width: 18 },
+        { key: "missedHours", width: 24 },
+      ];
 
-    // Style the header row (Bold text, Yellow BG, Center aligned, Borders)
-    const headerRow = worksheet.getRow(1);
-    headerRow.eachCell((cell) => {
-      cell.font = { bold: true };
-      cell.fill = {
+      // Sheet Title
+      summarySheet.mergeCells("A1:I1");
+      const titleCell = summarySheet.getCell("A1");
+      titleCell.value = `Attendance Quick Summary - ${monthName}`;
+      titleCell.font = { name: "Arial", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleCell.fill = {
         type: "pattern",
         pattern: "solid",
-        fgColor: { argb: "FFFFFF00" }, // Yellow
+        fgColor: { argb: "FF0F172A" }, // Dark Slate (Tailwind slate-900)
       };
-      cell.alignment = { vertical: "middle", horizontal: "center" };
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-    });
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      summarySheet.getRow(1).height = 34;
 
-    // Style the rest of the cells (Center aligned, Borders)
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) {
-        // Skip header row
-        row.eachCell((cell) => {
+      // Header Row
+      const summaryHeaderRow = summarySheet.addRow([
+        "#",
+        "Employee",
+        "Working Days",
+        "Present Days",
+        "Leave",
+        "Not Marked",
+        "Hours Logged",
+        "Expected Hours",
+        "Missed Hours",
+      ]);
+      summaryHeaderRow.height = 26;
+
+      summaryHeaderRow.eachCell((cell) => {
+        cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FF334155" }, // Slate-700
+        };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF94A3B8" } },
+          bottom: { style: "medium", color: { argb: "FF475569" } },
+          left: { style: "thin", color: { argb: "FF94A3B8" } },
+          right: { style: "thin", color: { argb: "FF94A3B8" } },
+        };
+      });
+
+      // Data Rows
+      summary.forEach((item, idx) => {
+        const row = summarySheet.addRow([
+          item.index,
+          item.employee,
+          item.workingDays,
+          item.presentDays,
+          item.leave,
+          item.notMarked,
+          item.hoursLogged,
+          item.expectedHours,
+          item.missedHours,
+        ]);
+        row.height = 22;
+
+        const isEven = idx % 2 === 0;
+        const bgArgb = isEven ? "FFFFFFFF" : "FFF8FAFC";
+
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          cell.font = { name: "Arial", size: 10, color: { argb: "FF1E293B" } };
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: bgArgb },
+          };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFE2E8F0" } },
+            bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+            left: { style: "thin", color: { argb: "FFE2E8F0" } },
+            right: { style: "thin", color: { argb: "FFE2E8F0" } },
+          };
+
+          // Alignments
+          if (colNumber === 1) {
+            cell.alignment = { vertical: "middle", horizontal: "center" };
+          } else if (colNumber === 2) {
+            cell.alignment = { vertical: "middle", horizontal: "left" };
+            cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF0F172A" } };
+          } else if (colNumber >= 3 && colNumber <= 5) {
+            cell.alignment = { vertical: "middle", horizontal: "center" };
+          } else if (colNumber === 6) {
+            // Not Marked
+            cell.alignment = { vertical: "middle", horizontal: "center" };
+            if (Number(item.notMarked) > 0) {
+              cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFEA580C" } }; // Orange
+              cell.fill = {
+                type: "pattern",
+                pattern: "solid",
+                fgColor: { argb: "FFFFF7ED" },
+              };
+            }
+          } else if (colNumber === 7 || colNumber === 8) {
+            cell.alignment = { vertical: "middle", horizontal: "right" };
+          } else if (colNumber === 9) {
+            cell.alignment = { vertical: "middle", horizontal: "right" };
+            if (item.missedHours !== "0:00" && item.missedHours !== "Not in attendance data") {
+              cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFDC2626" } }; // Red
+              cell.fill = {
+                type: "pattern",
+                pattern: "solid",
+                fgColor: { argb: "FFFFF1F2" }, // Soft rose
+              };
+            } else if (item.missedHours === "Not in attendance data") {
+              cell.font = { name: "Arial", size: 9, italic: true, color: { argb: "FF64748B" } };
+              cell.alignment = { vertical: "middle", horizontal: "center" };
+            } else {
+              cell.font = { name: "Arial", size: 10, color: { argb: "FF059669" } }; // Green
+            }
+          }
+        });
+      });
+    }
+
+    // ==========================================
+    // TAB 2: DETAILED EMPLOYEE REPORT
+    // ==========================================
+    if (includeDetailed) {
+      const detailSheet = workbook.addWorksheet("Detailed Employee Report", {
+        views: [{ showGridLines: true }],
+      });
+
+      detailSheet.columns = [
+        { key: "date", width: 14 },
+        { key: "day", width: 14 },
+        { key: "status", width: 18 },
+        { key: "checkIn", width: 14 },
+        { key: "checkOut", width: 14 },
+        { key: "hoursWorked", width: 16 },
+        { key: "expectedHours", width: 16 },
+        { key: "gap", width: 18 },
+      ];
+
+      // Sheet Main Title
+      detailSheet.mergeCells("A1:H1");
+      const detailTitleCell = detailSheet.getCell("A1");
+      detailTitleCell.value = `Detailed Employee Attendance Report - ${monthName}`;
+      detailTitleCell.font = { name: "Arial", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      detailTitleCell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF0F172A" },
+      };
+      detailTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      detailSheet.getRow(1).height = 34;
+
+      detailSheet.addRow([]); // Blank spacer
+
+      targetDetailed.forEach((emp) => {
+        // 1. Employee Name Header Banner
+        const empHeaderRow = detailSheet.addRow([
+          `Employee: ${emp.employee}  (${emp.department} • Shift: ${emp.shiftHours} hrs)`,
+        ]);
+        empHeaderRow.height = 24;
+        const startRowIdx = empHeaderRow.number;
+        detailSheet.mergeCells(`A${startRowIdx}:H${startRowIdx}`);
+        const empCell = detailSheet.getCell(`A${startRowIdx}`);
+        empCell.font = { name: "Arial", size: 11, bold: true, color: { argb: "FF1E293B" } };
+        empCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFE2E8F0" }, // Slate-200
+        };
+        empCell.alignment = { vertical: "middle", horizontal: "left" };
+        empCell.border = {
+          top: { style: "medium", color: { argb: "FF64748B" } },
+          bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+          left: { style: "medium", color: { argb: "FF64748B" } },
+          right: { style: "medium", color: { argb: "FF64748B" } },
+        };
+
+        // 2. One-line Quick Summary row for this employee
+        const s = emp.summary;
+        const summaryText = s.hasData
+          ? `Working Days: ${s.workingDays}  |  Present Days: ${s.presentDays}  |  Leave: ${s.leave}  |  Not Marked: ${s.notMarked}  |  Hours Logged: ${s.hoursLogged}  |  Expected Hours: ${s.expectedHours}  |  Missed Hours: ${s.missedHours}`
+          : "No attendance data available for this employee this month";
+
+        const empSummaryRow = detailSheet.addRow([summaryText]);
+        empSummaryRow.height = 20;
+        const summaryRowIdx = empSummaryRow.number;
+        detailSheet.mergeCells(`A${summaryRowIdx}:H${summaryRowIdx}`);
+        const summaryCell = detailSheet.getCell(`A${summaryRowIdx}`);
+        summaryCell.font = {
+          name: "Arial",
+          size: 9.5,
+          bold: true,
+          color: s.missedHours && s.missedHours !== "0:00" && s.hasData ? { argb: "FFB91C1C" } : { argb: "FF475569" },
+        };
+        summaryCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF8FAFC" },
+        };
+        summaryCell.alignment = { vertical: "middle", horizontal: "left" };
+        summaryCell.border = {
+          bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+          left: { style: "medium", color: { argb: "FF64748B" } },
+          right: { style: "medium", color: { argb: "FF64748B" } },
+        };
+
+        // 3. Table Headers for daily timesheet
+        const tableHeaderRow = detailSheet.addRow([
+          "Date",
+          "Day",
+          "Status",
+          "Check In",
+          "Check Out",
+          "Hours Worked",
+          "Expected Hours",
+          "Hours Gap",
+        ]);
+        tableHeaderRow.height = 20;
+        tableHeaderRow.eachCell((cell) => {
+          cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FFFFFFFF" } };
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FF475569" }, // Slate-600
+          };
           cell.alignment = { vertical: "middle", horizontal: "center" };
           cell.border = {
-            top: { style: "thin" },
-            left: { style: "thin" },
-            bottom: { style: "thin" },
-            right: { style: "thin" },
+            top: { style: "thin", color: { argb: "FF94A3B8" } },
+            bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+            left: { style: "thin", color: { argb: "FF94A3B8" } },
+            right: { style: "thin", color: { argb: "FF94A3B8" } },
           };
         });
-      }
-    });
 
-    // Generate buffer
+        // 4. Daily Data Rows
+        emp.days.forEach((day, dIdx) => {
+          const dRow = detailSheet.addRow([
+            day.date,
+            day.day,
+            day.status,
+            day.checkIn,
+            day.checkOut,
+            day.hoursWorked,
+            day.expectedHours,
+            day.gap,
+          ]);
+          dRow.height = 18;
+
+          const isRowEven = dIdx % 2 === 0;
+          const rowBg = isRowEven ? "FFFFFFFF" : "FFF8FAFC";
+
+          dRow.eachCell({ includeEmpty: true }, (cell, colIdx) => {
+            cell.font = { name: "Arial", size: 9, color: { argb: "FF334155" } };
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: rowBg },
+            };
+            cell.border = {
+              top: { style: "thin", color: { argb: "FFE2E8F0" } },
+              bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+              left: { style: "thin", color: { argb: "FFE2E8F0" } },
+              right: { style: "thin", color: { argb: "FFE2E8F0" } },
+            };
+
+            if (colIdx <= 2) {
+              cell.alignment = { vertical: "middle", horizontal: "center" };
+            } else if (colIdx === 3) {
+              cell.alignment = { vertical: "middle", horizontal: "left" };
+              const sVal = String(day.status || "");
+              if (sVal === "Present") {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FF059669" } };
+              } else if (sVal.startsWith("Holiday")) {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FF2563EB" } }; // Blue
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } };
+              } else if (sVal.startsWith("Week Off")) {
+                cell.font = { name: "Arial", size: 9, color: { argb: "FF64748B" } }; // Slate
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+              } else if (sVal === "Not Marked") {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FFEA580C" } }; // Orange
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF7ED" } };
+              } else if (sVal === "Leave" || sVal === "Absent") {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FFE11D48" } };
+              } else if (sVal === "Half Day") {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FFD97706" } };
+              }
+            } else if (colIdx === 4 || colIdx === 5) {
+              cell.alignment = { vertical: "middle", horizontal: "center" };
+            } else if (colIdx === 6 || colIdx === 7) {
+              cell.alignment = { vertical: "middle", horizontal: "right" };
+            } else if (colIdx === 8) {
+              cell.alignment = { vertical: "middle", horizontal: "right" };
+              if (day.isShortage) {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FFDC2626" } }; // Red for shortage
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF1F2" } };
+              } else if (day.gap.startsWith("+")) {
+                cell.font = { name: "Arial", size: 9, bold: true, color: { argb: "FF059669" } }; // Green for surplus
+              }
+            }
+          });
+        });
+
+        // 5. Spacer between employees
+        const spacerRow = detailSheet.addRow([]);
+        spacerRow.height = 14;
+      });
+    }
+
+    // Write buffer and send
     const excelBuffer = await workbook.xlsx.writeBuffer();
 
-    // Set headers and send response
+    let filePrefix = "Attendance_Report";
+    if (exportType === ReportExportType.SUMMARY) filePrefix = "Attendance_Summary";
+    else if (exportType === ReportExportType.DETAILED) filePrefix = "Attendance_Detailed";
+
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=Attendance_${month}.xlsx`,
+      `attachment; filename=${filePrefix}_${month}.xlsx`,
     );
     res.send(excelBuffer);
   } catch (error) {
@@ -650,3 +872,4 @@ export const exportMonthlyAttendance = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
