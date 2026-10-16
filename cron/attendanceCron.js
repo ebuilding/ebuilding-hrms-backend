@@ -6,12 +6,66 @@ import Config from "../models/Config.js";
 import CronLog from "../models/CronLog.js";
 import { isWeekOffDate } from "../utils/weekOff.js";
 import { findHolidayForDate } from "../utils/holiday.js";
+import { DayType, AttendanceStatus } from "../constants/enums.js";
 
 const TIMEZONE = process.env.CRON_TIMEZONE || "Asia/Kolkata";
 const SCHEDULE = process.env.ATTENDANCE_CRON_SCHEDULE || "30 0 * * *";
 
 const normalizeDate = (value) => {
   return moment.tz(value, TIMEZONE).startOf("day").toDate();
+};
+
+const autoPunchOutMissedCheckouts = async (todayStart, logDetails) => {
+  try {
+    const unclosedRecords = await Attendance.find({
+      date: { $lt: todayStart },
+      checkIn: { $ne: null },
+      checkOut: null,
+    });
+
+    for (const record of unclosedRecords) {
+      try {
+        const checkInMoment = moment(record.checkIn).tz(TIMEZONE);
+        let checkOutMoment = checkInMoment
+          .clone()
+          .set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+
+        if (checkOutMoment.isSameOrBefore(checkInMoment)) {
+          checkOutMoment.add(1, "day");
+        }
+
+        record.checkOut = checkOutMoment.toDate();
+        const duration = Math.max(
+          0,
+          (record.checkOut - record.checkIn) / (1000 * 60 * 60),
+        );
+        record.workingHours = parseFloat(duration.toFixed(2));
+        record.dayType =
+          record.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+        record.status = AttendanceStatus.PRESENT;
+        record.updatedBy = "System";
+        record.adminUpdatedAt = new Date();
+        await record.save();
+
+        logDetails.push({
+          attendanceId: record._id,
+          employeeId: record.employeeId,
+          action: "UPDATED",
+          status: AttendanceStatus.PRESENT,
+          reason: "Auto punch-out for missed checkout at 07:00 PM",
+        });
+      } catch (err) {
+        logDetails.push({
+          attendanceId: record._id,
+          employeeId: record.employeeId,
+          action: "FAILED",
+          error: `Auto punch-out failed: ${err.message}`,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Error in autoPunchOutMissedCheckouts:", err);
+  }
 };
 
 const markYesterdayAbsent = async (todayStart, activeEmployees, logDetails) => {
@@ -153,8 +207,8 @@ export const runAttendanceCron = async () => {
       return;
     }
 
-    // Commented out as per user request: No need to mark absent if not marked
-    // await markYesterdayAbsent(todayStart, activeEmployees, logDetails);
+    // Auto punch-out missed checkouts from yesterday or past days
+    await autoPunchOutMissedCheckouts(todayStart, logDetails);
     await createTodayPlaceholders(todayStart, activeEmployees, logDetails);
 
     cronLog.details = logDetails;

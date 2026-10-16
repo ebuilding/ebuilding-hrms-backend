@@ -77,6 +77,39 @@ export const AttendanceStatus = Object.freeze({
   HOLIDAY: "HOLIDAY",
   WEEK_OFF: "WEEK_OFF",
   HALF_DAY: "HALF_DAY",
+  NOT_JOINED: "NOT_JOINED",
+});
+
+export const AttendanceStatusLabel = Object.freeze({
+  [AttendanceStatus.PRESENT]: "Present",
+  [AttendanceStatus.HALF_DAY]: "Half Day",
+  [AttendanceStatus.LEAVE]: "Leave",
+  [AttendanceStatus.NOT_MARKED]: "Not Marked",
+  [AttendanceStatus.HOLIDAY]: "Holiday",
+  [AttendanceStatus.WEEK_OFF]: "Week Off",
+  [AttendanceStatus.NOT_JOINED]: "Not Joined",
+});
+
+export const ReportFilterType = Object.freeze({
+  ALL: "ALL",
+  MISSED: "MISSED",
+  PERFECT: "PERFECT",
+});
+
+export const ReportViewTab = Object.freeze({
+  SUMMARY: "summary",
+  DETAILED: "detailed",
+});
+
+export const ReportCategory = Object.freeze({
+  ATTENDANCE: "ATTENDANCE",
+  LEAVE: "LEAVE",
+});
+
+export const ReportExportType = Object.freeze({
+  SUMMARY: "summary",
+  DETAILED: "detailed",
+  ALL: "all",
 });
 
 export const DayType = Object.freeze({

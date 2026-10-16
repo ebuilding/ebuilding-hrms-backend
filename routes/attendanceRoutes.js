@@ -8,6 +8,7 @@ import {
   getAttendanceStats,
   getTodayAttendance,
   exportMonthlyAttendance,
+  getMonthlyReportData,
 } from "../controllers/attendanceController.js";
 
 const attendanceRouter = Router();
@@ -19,6 +20,12 @@ attendanceRouter.get(
   protect,
   protectAdmin,
   getAdminTodayAttendance,
+);
+attendanceRouter.get(
+  "/admin/report",
+  protect,
+  protectAdmin,
+  getMonthlyReportData,
 );
 attendanceRouter.post(
   "/admin/export",
