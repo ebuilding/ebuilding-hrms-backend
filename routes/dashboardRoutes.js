@@ -7,3 +7,4 @@ const dashboardRouter = Router();
 dashboardRouter.get("/", protect, getDashboard);
 
 export default dashboardRouter;
+

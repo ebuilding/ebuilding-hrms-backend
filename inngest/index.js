@@ -573,12 +573,26 @@ style="
   },
 );
 
-// The annual leave reset is now handled dynamically by the paidLeave engine 
-// and idempotency keys, so we no longer hardcode a January 1st reset.
+export const celebrationWishesCron = inngest.createFunction(
+  {
+    id: "celebration-wishes-cron",
+    triggers: [{ cron: "TZ=Asia/Kolkata 0 9 * * *" }],
+  },
+  async ({ step }) => {
+    return await step.run("send-celebration-wishes", async () => {
+      const { sendDailyAutomatedCelebrationWishes } = await import(
+        "../utils/celebrations.js"
+      );
+      return await sendDailyAutomatedCelebrationWishes();
+    });
+  },
+);
 
-// Create an empty array where we'll export future Inngest functions
+// Create an array where we export Inngest functions
 export const functions = [
   autoCheckOut,
   leaveApplicationReminder,
   attendanceReminderCron,
+  celebrationWishesCron,
 ];
+
