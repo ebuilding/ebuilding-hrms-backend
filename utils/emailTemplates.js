@@ -510,3 +510,114 @@ export const getPasswordResetSuccessEmail = ({ name = "Team Member" }) => {
 
   return getEmailTemplate(content, "Password Changed");
 };
+
+export const getBirthdayWishEmail = ({ name = "Team Member", companyName = "E Building HRMS", customMessage = "" }) => {
+  const content = `
+<div style="text-align:center; margin-bottom:28px;">
+  <div style="
+    display:inline-block;
+    width:64px;
+    height:64px;
+    line-height:64px;
+    background:#fdf2f8;
+    color:#811c50;
+    border-radius:50%;
+    font-size:32px;
+    margin-bottom:16px;
+    border:2px solid #fbcfe8;
+  ">
+    🎂
+  </div>
+  <h2 style="color:#0f172a; margin:0 0 8px 0; font-size:24px; font-weight:800; letter-spacing:-0.02em;">Happy Birthday, ${name}! 🎉</h2>
+  <p style="color:#811c50; font-size:15px; font-weight:600; margin:0;">Wishing you a truly wonderful day!</p>
+</div>
+
+<p style="color:#334155; font-size:15px; line-height:1.7; margin-bottom:16px;">
+  Dear <strong>${name}</strong>,
+</p>
+
+<p style="color:#334155; font-size:15px; line-height:1.7;">
+  On behalf of everyone at <strong>${companyName}</strong>, we wish you a very Happy Birthday! 🌟
+</p>
+
+${customMessage ? `
+<div style="background:#fdf2f8; border-left:4px solid #811c50; border-radius:0 12px 12px 0; padding:16px; margin:20px 0;">
+  <p style="color:#811c50; font-size:14px; font-weight:600; margin:0 0 4px 0;">A special note from your team:</p>
+  <p style="color:#334155; font-size:14px; margin:0; line-height:1.6; font-style:italic;">"${customMessage}"</p>
+</div>
+` : `
+<p style="color:#334155; font-size:15px; line-height:1.7;">
+  Thank you for bringing your energy, talent, and passion to our team every single day. We hope this year brings you tremendous joy, good health, personal fulfillment, and continued success.
+</p>
+`}
+
+<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:16px; padding:20px; text-align:center; margin:28px 0;">
+  <p style="color:#64748b; font-size:13px; text-transform:uppercase; letter-spacing:0.05em; font-weight:700; margin:0 0 4px 0;">Celebration Milestone</p>
+  <p style="color:#0f172a; font-size:18px; font-weight:800; margin:0;">Have a fantastic celebration! 🎈🍰</p>
+</div>
+
+<p style="color:#64748b; font-size:14px; margin-top:24px;">
+  Warmest regards,<br />
+  <strong>${companyName} Team</strong>
+</p>
+`;
+
+  return getEmailTemplate(content, "Birthday Wishes");
+};
+
+export const getWorkAnniversaryWishEmail = ({ name = "Team Member", years = 1, companyName = "E Building HRMS", customMessage = "" }) => {
+  const content = `
+<div style="text-align:center; margin-bottom:28px;">
+  <div style="
+    display:inline-block;
+    width:64px;
+    height:64px;
+    line-height:64px;
+    background:#ecfdf5;
+    color:#059669;
+    border-radius:50%;
+    font-size:32px;
+    margin-bottom:16px;
+    border:2px solid #a7f3d0;
+  ">
+    🎖️
+  </div>
+  <h2 style="color:#0f172a; margin:0 0 8px 0; font-size:24px; font-weight:800; letter-spacing:-0.02em;">Happy Work Anniversary, ${name}! 🎊</h2>
+  <div style="display:inline-block; background:#059669; color:#ffffff; font-size:13px; font-weight:700; padding:6px 16px; border-radius:999px; margin-top:4px;">
+    Celebrating ${years} ${years === 1 ? "Year" : "Years"} with Us
+  </div>
+</div>
+
+<p style="color:#334155; font-size:15px; line-height:1.7; margin-bottom:16px;">
+  Dear <strong>${name}</strong>,
+</p>
+
+<p style="color:#334155; font-size:15px; line-height:1.7;">
+  Today marks a very special milestone — congratulations on completing <strong>${years} ${years === 1 ? "year" : "years"}</strong> at <strong>${companyName}</strong>! 🚀
+</p>
+
+${customMessage ? `
+<div style="background:#ecfdf5; border-left:4px solid #059669; border-radius:0 12px 12px 0; padding:16px; margin:20px 0;">
+  <p style="color:#065f46; font-size:14px; font-weight:600; margin:0 0 4px 0;">A note of appreciation:</p>
+  <p style="color:#334155; font-size:14px; margin:0; line-height:1.6; font-style:italic;">"${customMessage}"</p>
+</div>
+` : `
+<p style="color:#334155; font-size:15px; line-height:1.7;">
+  Your hard work, commitment, and valuable contributions continue to make an enormous difference. We are incredibly proud and grateful to have you on our team and look forward to achieving many more milestones together.
+</p>
+`}
+
+<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:16px; padding:20px; text-align:center; margin:28px 0;">
+  <p style="color:#64748b; font-size:13px; text-transform:uppercase; letter-spacing:0.05em; font-weight:700; margin:0 0 4px 0;">Company Milestone</p>
+  <p style="color:#0f172a; font-size:18px; font-weight:800; margin:0;">Thank you for your loyalty & dedication! 👏</p>
+</div>
+
+<p style="color:#64748b; font-size:14px; margin-top:24px;">
+  Warmest congratulations,<br />
+  <strong>${companyName} Management</strong>
+</p>
+`;
+
+  return getEmailTemplate(content, "Work Anniversary Wishes");
+};
+

@@ -7,6 +7,7 @@ import CronLog from "../models/CronLog.js";
 import { isWeekOffDate } from "../utils/weekOff.js";
 import { findHolidayForDate } from "../utils/holiday.js";
 import { DayType, AttendanceStatus } from "../constants/enums.js";
+import { sendDailyAutomatedCelebrationWishes } from "../utils/celebrations.js";
 
 const TIMEZONE = process.env.CRON_TIMEZONE || "Asia/Kolkata";
 const SCHEDULE = process.env.ATTENDANCE_CRON_SCHEDULE || "30 0 * * *";
@@ -236,6 +237,25 @@ export const runAttendanceCron = async () => {
   }
 };
 
+export const startCelebrationsCron = () => {
+  cron.schedule(
+    "0 9 * * *",
+    async () => {
+      try {
+        console.log("Daily celebrations wish cron starting...");
+        const res = await sendDailyAutomatedCelebrationWishes();
+        console.log("Celebrations wish cron finished:", res);
+      } catch (err) {
+        console.error("Error in celebrations wish cron:", err);
+      }
+    },
+    {
+      timezone: TIMEZONE,
+    },
+  );
+  console.log(`Celebrations wish cron scheduled: 0 9 * * * (${TIMEZONE})`);
+};
+
 export const startAttendanceCron = () => {
   cron.schedule(
     SCHEDULE,
@@ -252,4 +272,5 @@ export const startAttendanceCron = () => {
     },
   );
   console.log(`Attendance cron scheduled: ${SCHEDULE} (${TIMEZONE})`);
+  startCelebrationsCron();
 };

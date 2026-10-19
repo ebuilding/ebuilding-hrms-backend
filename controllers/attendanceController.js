@@ -197,9 +197,12 @@ export const getAttendance = async (req, res) => {
       employee = await Employee.findById(employeeId);
     } else {
       employee = await Employee.findOne({ userId: session.userId });
+      if (!employee && session.role === UserRole.ADMIN) {
+        employee = await Employee.findOne({ isDeleted: { $ne: true } });
+      }
     }
 
-    if (!employee) return res.status(404).json({ error: "Employee not found" });
+    if (!employee) return res.status(404).json({ error: "No employee record found" });
 
     const [year, monthNum] = month.split("-");
     const startOfMonth = moment

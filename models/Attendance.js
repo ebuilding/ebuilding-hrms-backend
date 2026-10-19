@@ -26,6 +26,7 @@ const attendanceSchema = new mongoose.Schema(
     compOffCredited: { type: Boolean, default: false },
     updatedBy: { type: String, default: null },
     adminUpdatedAt: { type: Date, default: null },
+    isDirectAdminLeave: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

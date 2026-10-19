@@ -39,6 +39,8 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
   const { workingDates, chargedDays } = await getLeaveWorkData(leave);
   if (chargedDays <= 0) return;
 
+  const isDirectAdminLeave = Boolean(leave.addedBy);
+
   for (const workingDate of workingDates) {
     const dateStart = moment(workingDate).tz(TZ).startOf("day").toDate();
     const dateEnd = moment(workingDate).tz(TZ).endOf("day").toDate();
@@ -54,8 +56,14 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
       attendanceRecord.checkIn = null;
       attendanceRecord.checkOut = null;
       attendanceRecord.workingHours = null;
-      attendanceRecord.updatedBy = adminEmail || "System";
-      attendanceRecord.adminUpdatedAt = new Date();
+      attendanceRecord.isDirectAdminLeave = isDirectAdminLeave;
+      if (isDirectAdminLeave) {
+        attendanceRecord.updatedBy = leave.addedBy || adminEmail || "System";
+        attendanceRecord.adminUpdatedAt = leave.adminUpdatedAt || new Date();
+      } else {
+        attendanceRecord.updatedBy = null;
+        attendanceRecord.adminUpdatedAt = null;
+      }
       await attendanceRecord.save();
     } else {
       await Attendance.create({
@@ -66,8 +74,9 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
         checkIn: null,
         checkOut: null,
         workingHours: null,
-        updatedBy: adminEmail || "System",
-        adminUpdatedAt: new Date(),
+        isDirectAdminLeave,
+        updatedBy: isDirectAdminLeave ? (leave.addedBy || adminEmail || "System") : null,
+        adminUpdatedAt: isDirectAdminLeave ? (leave.adminUpdatedAt || new Date()) : null,
       });
     }
   }
@@ -195,7 +204,7 @@ export const getLeaves = async (req, res) => {
       const status = req.query.status;
       const where = status ? { status } : {};
       const leaves = await LeaveApplication.find(where)
-        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt employeeId")
+        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt employeeId addedBy adminUpdatedAt")
         .populate({
           path: "employeeId",
           select: "firstName lastName department profile_img position",
@@ -228,7 +237,7 @@ export const getLeaves = async (req, res) => {
       const leaves = await LeaveApplication.find({
         employeeId: employee._id,
       })
-        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt")
+        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt addedBy adminUpdatedAt")
         .sort({ createdAt: -1 })
         .lean();
       return res.json({
@@ -492,6 +501,8 @@ export const getLeaveCalendar = async (req, res) => {
         workingDates: l.workingDates || [],
         chargedDays: l.chargedDays ?? 1,
         reason: l.reason,
+        addedBy: l.addedBy || null,
+        adminUpdatedAt: l.adminUpdatedAt || null,
         createdAt: l.createdAt,
       }));
 

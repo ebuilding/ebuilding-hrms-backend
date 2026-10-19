@@ -8,6 +8,9 @@ import Holiday from "../models/Holiday.js";
 import { processPaidLeaveGrants } from "../utils/paidLeave.js";
 import { AttendanceStatus } from "../constants/enums.js";
 
+import RegistrationInvite from "../models/RegistrationInvite.js";
+import { getCelebrationsData } from "../utils/celebrations.js";
+
 const TZ = "Asia/Kolkata";
 
 // Get dashboard for employee and admin
@@ -18,22 +21,30 @@ export const getDashboard = async (req, res) => {
     if (session.role === "ADMIN") {
       const todayStart = moment.tz(TZ).startOf("day").toDate();
       const todayEnd = moment.tz(TZ).endOf("day").toDate();
+      const thirtyDaysAgo = moment.tz(TZ).subtract(30, "days").startOf("day").toDate();
 
       const [
-        totalEmployees,
-        todayAttendanceCount,
+        allActiveEmployees,
+        todayApprovedLeaves,
         pendingLeavesCount,
         totalDepartments,
         departmentStats,
-        attendanceDistribution,
         leaveStats,
         recentLeaves,
+        celebrations,
+        todayAttendanceRecords,
+        missingPunchOuts,
+        allInvites,
       ] = await Promise.all([
-        Employee.countDocuments({ isDeleted: { $ne: true } }),
-        Attendance.countDocuments({
-          date: { $gte: todayStart, $lte: todayEnd },
-          status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
-        }),
+        Employee.find({ isDeleted: { $ne: true } })
+          .populate("department", "name")
+          .select("firstName lastName position department profile_img email")
+          .lean(),
+        LeaveApplication.find({
+          status: "APPROVED",
+          startDate: { $lte: todayEnd },
+          endDate: { $gte: todayStart },
+        }).lean(),
         LeaveApplication.countDocuments({ status: "PENDING" }),
         Department.countDocuments(),
         // Department Distribution
@@ -56,11 +67,6 @@ export const getDashboard = async (req, res) => {
             },
           },
         ]),
-        // Today's Attendance Distribution
-        Attendance.aggregate([
-          { $match: { date: { $gte: todayStart, $lte: todayEnd } } },
-          { $group: { _id: "$status", count: { $sum: 1 } } },
-        ]),
         // Leave Type Stats (Approved/Pending in last 30 days)
         LeaveApplication.aggregate([
           {
@@ -78,7 +84,100 @@ export const getDashboard = async (req, res) => {
           .sort({ createdAt: -1 })
           .limit(5)
           .lean(),
+        // Celebrations (Birthdays & Anniversaries)
+        getCelebrationsData(30),
+        // Today's attendance records with punch-in
+        Attendance.find({
+          date: { $gte: todayStart, $lte: todayEnd },
+          checkIn: { $ne: null },
+        })
+          .populate({
+            path: "employeeId",
+            select: "firstName lastName position profile_img department",
+            populate: { path: "department", select: "name" },
+          })
+          .lean(),
+        // Missing punch-outs or auto punch-outs from previous 30 days
+        Attendance.find({
+          date: { $lt: todayStart, $gte: thirtyDaysAgo },
+          checkIn: { $ne: null },
+          $or: [{ checkOut: null }, { updatedBy: "System" }],
+        })
+          .populate({
+            path: "employeeId",
+            select: "firstName lastName position profile_img department",
+            populate: { path: "department", select: "name" },
+          })
+          .sort({ date: -1 })
+          .limit(8)
+          .lean(),
+        // Registration invites & candidate submissions
+        RegistrationInvite.find()
+          .populate("department", "name")
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .lean(),
       ]);
+
+      const totalEmployees = allActiveEmployees.length;
+      const onLeaveEmployeeIds = new Set(
+        todayApprovedLeaves.map((l) => l.employeeId?.toString()).filter(Boolean),
+      );
+      const onLeaveCount = onLeaveEmployeeIds.size;
+
+      const todayAttendanceMap = new Map(
+        todayAttendanceRecords.map((r) => [
+          r.employeeId?._id?.toString() || r.employeeId?.toString(),
+          r,
+        ]),
+      );
+
+      // List of employees who punched in today
+      const punchedInList = todayAttendanceRecords
+        .filter((rec) => rec.employeeId && rec.checkIn)
+        .map((rec) => {
+          const mIn = moment(rec.checkIn).tz(TZ);
+          const mOut = rec.checkOut ? moment(rec.checkOut).tz(TZ) : null;
+          const isLate = mIn.hour() > 9 || (mIn.hour() === 9 && mIn.minute() > 30);
+          return {
+            id: rec._id,
+            employeeId: rec.employeeId._id,
+            name: `${rec.employeeId.firstName || ""} ${rec.employeeId.lastName || ""}`.trim(),
+            position: rec.employeeId.position || "Employee",
+            department: rec.employeeId.department?.name || "General",
+            profile_img: rec.employeeId.profile_img || "",
+            checkInTime: mIn.format("hh:mm A"),
+            checkOutTime: mOut ? mOut.format("hh:mm A") : null,
+            isLate,
+            status: rec.status,
+          };
+        });
+
+      // List of employees who have NOT punched in today
+      const notPunchedInList = allActiveEmployees
+        .filter((emp) => !todayAttendanceMap.has(emp._id.toString()))
+        .map((emp) => {
+          const isOnLeave = onLeaveEmployeeIds.has(emp._id.toString());
+          return {
+            id: emp._id,
+            employeeId: emp._id,
+            name: `${emp.firstName || ""} ${emp.lastName || ""}`.trim(),
+            position: emp.position || "Employee",
+            department: emp.department?.name || "General",
+            profile_img: emp.profile_img || "",
+            status: isOnLeave ? "On Leave" : "Not Marked",
+            isOnLeave,
+          };
+        });
+
+      const todayAttendanceCount = punchedInList.length;
+      const notMarkedCount = Math.max(0, totalEmployees - todayAttendanceCount - onLeaveCount);
+
+      const attendanceDistribution = [
+        { name: "Present", value: todayAttendanceCount, color: "#10b981" },
+        { name: "On Leave", value: onLeaveCount, color: "#f59e0b" },
+        { name: "Not Marked", value: notMarkedCount, color: "#ef4444" },
+      ];
 
       // Attendance Trend (Last 7 days)
       const last7Days = [];
@@ -101,6 +200,91 @@ export const getDashboard = async (req, res) => {
         }),
       );
 
+      // Process late arrivals (clocked in after 09:30 AM IST)
+      const lateArrivals = todayAttendanceRecords
+        .filter((rec) => {
+          if (!rec.checkIn || !rec.employeeId) return false;
+          const m = moment(rec.checkIn).tz(TZ);
+          return m.hour() > 9 || (m.hour() === 9 && m.minute() > 30);
+        })
+        .map((rec) => {
+          const m = moment(rec.checkIn).tz(TZ);
+          const scheduledStart = m.clone().hour(9).minute(30).second(0);
+          const lateMinutes = Math.max(1, m.diff(scheduledStart, "minutes"));
+          return {
+            id: rec._id,
+            employeeId: rec.employeeId?._id,
+            name: `${rec.employeeId?.firstName || ""} ${rec.employeeId?.lastName || ""}`.trim(),
+            position: rec.employeeId?.position || "Employee",
+            department: rec.employeeId?.department?.name || "General",
+            profile_img: rec.employeeId?.profile_img || "",
+            checkInTime: m.format("hh:mm A"),
+            lateMinutes,
+          };
+        });
+
+      // Format missing punch-outs
+      const formattedMissing = missingPunchOuts
+        .filter((rec) => rec.employeeId)
+        .map((rec) => ({
+          id: rec._id,
+          employeeId: rec.employeeId?._id,
+          name: `${rec.employeeId?.firstName || ""} ${rec.employeeId?.lastName || ""}`.trim(),
+          position: rec.employeeId?.position || "Employee",
+          department: rec.employeeId?.department?.name || "General",
+          profile_img: rec.employeeId?.profile_img || "",
+          dateStr: moment(rec.date).tz(TZ).format("MMM DD"),
+          checkInTime: rec.checkIn ? moment(rec.checkIn).tz(TZ).format("hh:mm A") : "—",
+          reason: !rec.checkOut ? "Missing Check-Out" : "Auto Clocked Out",
+        }));
+
+      // Process pending candidate submissions from invites
+      let pendingCandidates = [];
+      for (const inv of (allInvites || [])) {
+        for (const sub of (inv.submissions || [])) {
+          if (sub.approvalStatus === "PENDING" && sub.employeeId) {
+            pendingCandidates.push({
+              inviteId: inv._id,
+              employeeId: sub.employeeId,
+              submittedAt: sub.submittedAt,
+            });
+          }
+        }
+      }
+
+      if (pendingCandidates.length > 0) {
+        const empIds = pendingCandidates.map((c) => c.employeeId);
+        const emps = await Employee.find({ _id: { $in: empIds } })
+          .populate("department", "name")
+          .select("firstName lastName email position department profile_img createdAt")
+          .lean();
+        const empMap = new Map(emps.map((e) => [e._id.toString(), e]));
+
+        pendingCandidates = pendingCandidates.map((c) => {
+          const emp = empMap.get(c.employeeId.toString());
+          return {
+            ...c,
+            candidateName: emp ? `${emp.firstName} ${emp.lastName}`.trim() : "New Candidate",
+            candidateEmail: emp?.email || "",
+            candidatePosition: emp?.position || "Candidate",
+            candidateDepartment: emp?.department?.name || "General",
+            candidateProfileImg: emp?.profile_img || "",
+          };
+        });
+      }
+
+      const activeInviteLinks = (allInvites || [])
+        .filter((inv) => inv.isActive && new Date(inv.expiresAt) > new Date())
+        .map((inv) => ({
+          id: inv._id,
+          label: inv.label || "General Registration",
+          token: inv.token,
+          expiresAt: inv.expiresAt,
+          usedCount: inv.usedCount,
+          maxUses: inv.maxUses,
+          department: inv.department?.name || "All Departments",
+        }));
+
       return res.json({
         role: "ADMIN",
         totalEmployees,
@@ -112,10 +296,7 @@ export const getDashboard = async (req, res) => {
             name: d.name,
             value: d.value,
           })),
-          attendanceDistribution: attendanceDistribution.map((a) => ({
-            name: a._id,
-            value: a.count,
-          })),
+          attendanceDistribution,
           leaveStats: leaveStats.map((l) => ({
             name: l._id,
             value: l.count,
@@ -130,6 +311,22 @@ export const getDashboard = async (req, res) => {
           endDate: l.endDate,
           status: l.status,
         })),
+        celebrations: celebrations || { today: [], upcoming: [] },
+        attendanceWatchlist: {
+          totalEmployees,
+          punchedInCount: punchedInList.length,
+          notPunchedInCount: notPunchedInList.length,
+          onLeaveCount,
+          punchedInList,
+          notPunchedInList,
+          lateArrivals,
+          missingPunchOuts: formattedMissing,
+        },
+        pendingInvites: {
+          pendingCandidates,
+          activeInviteLinks,
+          totalPending: pendingCandidates.length,
+        },
       });
     } else {
       let employee = await Employee.findOne({
@@ -242,3 +439,4 @@ export const getDashboard = async (req, res) => {
     return res.status(500).json({ error: "Failed" });
   }
 };
+
