@@ -9,6 +9,7 @@ import {
   CompOffType,
 } from "../constants/enums.js";
 import { creditCompOffForAttendance } from "../utils/compOff.js";
+import { getAttendanceShiftConfig } from "../utils/shiftConfig.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -24,13 +25,17 @@ export const getEligibleDays = async (req, res) => {
       return res.status(404).json({ error: "Employee not found" });
     }
 
+    const shiftConfig = await getAttendanceShiftConfig();
+    const minCompOffHours = Number(shiftConfig?.minHoursForFullDay) || 4;
+    const fullDayShiftHours = Number(shiftConfig?.shiftHours) || 9;
+
     // 1. Fetch all attendance records on non-working days with completed checkIn/checkOut
     const workedDays = await Attendance.find({
       employeeId: employee._id,
       compoffFor: { $in: Object.values(CompOffType) },
       checkIn: { $ne: null },
       checkOut: { $ne: null },
-      workingHours: { $gte: 4 },
+      workingHours: { $gte: minCompOffHours },
       compOffCredited: { $ne: true },
     })
       .sort({ date: -1 })
@@ -55,7 +60,7 @@ export const getEligibleDays = async (req, res) => {
         const dateFormatted = moment(day.date).tz(TZ).format("MMM D, YYYY");
         const dayName = moment(day.date).tz(TZ).format("dddd");
         const hours = day.workingHours || 0;
-        const creditedDays = hours >= 8 ? 1 : 0.5;
+        const creditedDays = hours >= fullDayShiftHours ? 1 : 0.5;
         const dayType = creditedDays === 1 ? DayType.FULL_DAY : DayType.HALF_DAY;
 
         return {
@@ -112,8 +117,12 @@ export const requestCompOff = async (req, res) => {
       return res.status(400).json({ error: "Selected day has incomplete check-in/out records" });
     }
 
-    if (!attendance.workingHours || attendance.workingHours < 4) {
-      return res.status(400).json({ error: "A minimum of 4 working hours is required to claim comp-off" });
+    const shiftConfig = await getAttendanceShiftConfig();
+    const minCompOffHours = Number(shiftConfig?.minHoursForFullDay) || 4;
+    const fullDayShiftHours = Number(shiftConfig?.shiftHours) || 9;
+
+    if (!attendance.workingHours || attendance.workingHours < minCompOffHours) {
+      return res.status(400).json({ error: `A minimum of ${minCompOffHours} working hours is required to claim comp-off` });
     }
 
     if (attendance.compOffCredited) {
@@ -137,7 +146,7 @@ export const requestCompOff = async (req, res) => {
     }
 
     const hours = attendance.workingHours || 0;
-    const creditedDays = hours >= 8 ? 1 : 0.5;
+    const creditedDays = hours >= fullDayShiftHours ? 1 : 0.5;
     const dayType = creditedDays === 1 ? DayType.FULL_DAY : DayType.HALF_DAY;
 
     const compOffReq = await CompOffRequest.create({

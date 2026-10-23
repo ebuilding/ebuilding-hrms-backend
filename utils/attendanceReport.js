@@ -3,7 +3,6 @@ import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
 import Config from "../models/Config.js";
-import Department from "../models/Department.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import { isWeekOffDate } from "./weekOff.js";
 import {
@@ -13,6 +12,7 @@ import {
   ApprovalStatus,
   LeaveStatus,
 } from "../constants/enums.js";
+import { getAttendanceShiftConfig } from "./shiftConfig.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -52,8 +52,8 @@ export const calculateMonthlyReportData = async (monthStr) => {
   const endOfMonth = startOfMonth.clone().endOf("month");
   const daysInMonth = startOfMonth.daysInMonth();
 
-  // 1. Fetch Config, Holidays, Active Employees, Attendance, and Approved Leaves
-  const [weekOffConfig, holidays, employees, attendances, approvedLeaves] =
+  // 1. Fetch Config, Holidays, Active Employees, Attendance, Approved Leaves, and Shift Config
+  const [weekOffConfig, holidays, employees, attendances, approvedLeaves, shiftConfig] =
     await Promise.all([
       Config.findOne({ key: "weekOffDays" }).lean(),
       Holiday.find({
@@ -78,7 +78,11 @@ export const calculateMonthlyReportData = async (monthStr) => {
         startDate: { $lte: endOfMonth.toDate() },
         endDate: { $gte: startOfMonth.toDate() },
       }).lean(),
+      getAttendanceShiftConfig(),
     ]);
+
+  const defaultShiftHours = Number(shiftConfig?.shiftHours) || 9;
+  const minFullDayMinutes = (Number(shiftConfig?.minHoursForFullDay) || 4) * 60;
 
   // Holiday Map (YYYY-MM-DD -> Holiday Name)
   const holidayMap = new Map();
@@ -156,7 +160,10 @@ export const calculateMonthlyReportData = async (monthStr) => {
     const empAttendancesMap = attendanceByEmp.get(empIdStr) || new Map();
     const empLeavesMap = leavesByEmp.get(empIdStr) || new Map();
     const empJoinDate = emp.joinDate ? moment(emp.joinDate).tz(TZ).startOf("day") : null;
-    const dailyShift = emp.shiftHours && emp.shiftHours > 0 ? emp.shiftHours : 9;
+    const dailyShift =
+      emp.customShiftEnabled && emp.shiftHours && emp.shiftHours > 0
+        ? emp.shiftHours
+        : defaultShiftHours;
 
     let empWorkingDaysCount = 0;
     let presentDaysCount = 0;
@@ -236,7 +243,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
 
           if (
             att.dayType === DayType.HALF_DAY ||
-            (dayWorkedMinutes > 0 && dayWorkedMinutes < 300)
+            (dayWorkedMinutes > 0 && dayWorkedMinutes < minFullDayMinutes)
           ) {
             statusCode = AttendanceStatus.HALF_DAY;
             status = AttendanceStatusLabel[AttendanceStatus.HALF_DAY];
@@ -397,6 +404,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
     month: monthStr,
     monthName: startOfMonth.format("MMMM YYYY"),
     companyWorkingDays,
+    companyShiftHours: defaultShiftHours,
     totalEmployees: employees.length,
     summary,
     detailed,

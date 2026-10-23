@@ -4,8 +4,12 @@ import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import sendEmail from "../config/nodemailer.js";
-import { creditCompOffForAttendance } from "../utils/compOff.js";
-import { DayType, AttendanceStatus } from "../constants/enums.js";
+import { AttendanceStatus } from "../constants/enums.js";
+import {
+  getAttendanceShiftConfig,
+  determineAttendanceDayType,
+  getShiftEndMoment,
+} from "../utils/shiftConfig.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -227,12 +231,11 @@ const autoCheckOut = inngest.createFunction(
 
       attendance = await Attendance.findById(attendanceId);
       if (!attendance?.checkOut) {
+        const shiftConfig = await getAttendanceShiftConfig();
         const checkInMoment = moment(attendance.checkIn).tz(TZ);
-        let checkOutMoment = checkInMoment
-          .clone()
-          .set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+        let checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
 
-        // If check-in occurred at or after 7:00 PM, set checkout to 7:00 PM next day
+        // If check-in occurred at or after shift end time, set checkout to next day
         if (checkOutMoment.isSameOrBefore(checkInMoment)) {
           checkOutMoment.add(1, "day");
         }
@@ -243,8 +246,11 @@ const autoCheckOut = inngest.createFunction(
           (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60),
         );
         attendance.workingHours = parseFloat(duration.toFixed(2));
-        attendance.dayType =
-          attendance.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+        const { dayType } = determineAttendanceDayType(
+          attendance.workingHours,
+          shiftConfig,
+        );
+        attendance.dayType = dayType;
         attendance.status = AttendanceStatus.PRESENT;
         attendance.updatedBy = "System";
         attendance.adminUpdatedAt = new Date();

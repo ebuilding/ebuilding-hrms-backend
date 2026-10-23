@@ -4,6 +4,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
+    "build": "node scripts/buildCheck.js",
     "server": "nodemon server.js",
     "start": "node server.js",
     "seed": "node seed.js",

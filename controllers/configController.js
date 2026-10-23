@@ -1,4 +1,5 @@
 import Config from "../models/Config.js";
+import Employee from "../models/Employee.js";
 
 // Get config
 export const getConfig = async (req, res) => {
@@ -21,6 +22,23 @@ export const setConfig = async (req, res) => {
       { value },
       { upsert: true, new: true },
     );
+
+    // If attendanceShiftConfig is updated, synchronize standard employees' shiftHours
+    if (key === "attendanceShiftConfig" && value && value.shiftHours) {
+      const newShiftHours = Number(value.shiftHours);
+      if (!isNaN(newShiftHours) && newShiftHours > 0) {
+        await Employee.updateMany(
+          {
+            $or: [
+              { customShiftEnabled: { $ne: true } },
+              { customShiftEnabled: { $exists: false } },
+            ],
+          },
+          { shiftHours: newShiftHours },
+        );
+      }
+    }
+
     res.json({ success: true, data: config });
   } catch (error) {
     res.status(500).json({ error: "Failed to set config" });

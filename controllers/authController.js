@@ -19,6 +19,7 @@ import {
   PasswordResetReason,
   PasswordResetConfig,
 } from "../constants/enums.js";
+import { getAttendanceShiftConfig } from "../utils/shiftConfig.js";
 
 // Login for employee and admin
 // POST /api/auth/login
@@ -191,6 +192,9 @@ export const registerEmployee = async (req, res) => {
       isApproved: false, // Must be approved by admin!
     });
 
+    const shiftConfig = await getAttendanceShiftConfig();
+    const defaultShiftHours = Number(shiftConfig?.shiftHours) || 9;
+
     const employee = await Employee.create({
       userId: user._id,
       firstName,
@@ -202,7 +206,7 @@ export const registerEmployee = async (req, res) => {
       joinDate: joinDate ? new Date(joinDate) : new Date(),
       bio: bio || "",
       profile_img: profile_img || "",
-      shiftHours: 8,
+      shiftHours: defaultShiftHours,
       basicSalary: 0,
       allowances: 0,
       deductions: 0,
