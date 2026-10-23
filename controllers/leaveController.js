@@ -5,6 +5,7 @@ import LeaveApplication from "../models/LeaveApplication.js";
 import LeavePolicy from "../models/LeavePolicy.js";
 import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
+import CalendarOverride from "../models/CalendarOverride.js";
 import { getWorkingLeaveDays } from "../utils/leaveDays.js";
 import {
   processPaidLeaveGrants,
@@ -204,7 +205,7 @@ export const getLeaves = async (req, res) => {
       const status = req.query.status;
       const where = status ? { status } : {};
       const leaves = await LeaveApplication.find(where)
-        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt employeeId addedBy adminUpdatedAt")
+        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt employeeId addedBy adminUpdatedAt workingDates revertedDates revertReason revertedAt")
         .populate({
           path: "employeeId",
           select: "firstName lastName department profile_img position",
@@ -237,7 +238,7 @@ export const getLeaves = async (req, res) => {
       const leaves = await LeaveApplication.find({
         employeeId: employee._id,
       })
-        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt addedBy adminUpdatedAt")
+        .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt addedBy adminUpdatedAt workingDates revertedDates revertReason revertedAt")
         .sort({ createdAt: -1 })
         .lean();
       return res.json({
@@ -463,7 +464,7 @@ export const getLeaveCalendar = async (req, res) => {
       query.employeeId = employee._id;
     }
 
-    const [leaves, holidays] = await Promise.all([
+    const [leaves, holidays, overrides] = await Promise.all([
       LeaveApplication.find(query)
         .populate({
           path: "employeeId",
@@ -474,6 +475,14 @@ export const getLeaveCalendar = async (req, res) => {
         .lean(),
       Holiday.find({
         date: { $gte: monthStart, $lte: monthEnd },
+      })
+        .sort({ date: 1 })
+        .lean(),
+      CalendarOverride.find({
+        $or: [
+          { date: { $gte: monthStart, $lte: monthEnd } },
+          { swapDate: { $gte: monthStart, $lte: monthEnd } },
+        ],
       })
         .sort({ date: 1 })
         .lean(),
@@ -499,6 +508,9 @@ export const getLeaveCalendar = async (req, res) => {
         rawStartDate: l.startDate,
         rawEndDate: l.endDate,
         workingDates: l.workingDates || [],
+        revertedDates: l.revertedDates || [],
+        revertReason: l.revertReason || null,
+        revertedAt: l.revertedAt || null,
         chargedDays: l.chargedDays ?? 1,
         reason: l.reason,
         addedBy: l.addedBy || null,
@@ -528,11 +540,23 @@ export const getLeaveCalendar = async (req, res) => {
       year: h.year,
     }));
 
+    const formattedOverrides = overrides.map((o) => ({
+      id: o._id.toString(),
+      type: o.type,
+      title: o.title,
+      reason: o.reason,
+      date: moment(o.date).tz(TZ).format("YYYY-MM-DD"),
+      swapDate: o.swapDate ? moment(o.swapDate).tz(TZ).format("YYYY-MM-DD") : null,
+      year: o.year,
+      affectedLeavesCount: o.affectedLeaves?.length || 0,
+    }));
+
     return res.json({
       success: true,
       month: baseDate.format("YYYY-MM"),
       leaves: formattedLeaves,
       holidays: formattedHolidays,
+      overrides: formattedOverrides,
       stats: {
         totalLeaves: formattedLeaves.length,
         approvedCount,
@@ -545,4 +569,42 @@ export const getLeaveCalendar = async (req, res) => {
     return res.status(500).json({ error: "Failed to fetch leave calendar" });
   }
 };
+
+// GET /api/leave/calculate-days?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&isHalfDay=false
+export const calculateLeaveDays = async (req, res) => {
+  try {
+    const { startDate, endDate, isHalfDay } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "startDate and endDate are required" });
+    }
+
+    const isHalf = isHalfDay === "true" || isHalfDay === true;
+    const { workingDates, chargedDays } = await getWorkingLeaveDays({
+      startDate,
+      endDate,
+      isHalfDay: isHalf,
+    });
+
+    const start = moment.tz(startDate, "YYYY-MM-DD", TZ).startOf("day");
+    const end = moment.tz(endDate, "YYYY-MM-DD", TZ).startOf("day");
+    const totalSpan = isHalf
+      ? 0.5
+      : Math.round(end.diff(start, "days")) + 1;
+
+    const excludedDays = Math.max(0, totalSpan - chargedDays);
+
+    return res.json({
+      success: true,
+      totalSpan,
+      chargedDays,
+      excludedDays,
+      workingDates: workingDates.map((d) => moment(d).tz(TZ).format("YYYY-MM-DD")),
+      isHalfDay: isHalf,
+    });
+  } catch (error) {
+    console.error("Calculate Leave Days Error:", error);
+    return res.status(400).json({ error: error.message || "Failed to calculate leave days" });
+  }
+};
+
 

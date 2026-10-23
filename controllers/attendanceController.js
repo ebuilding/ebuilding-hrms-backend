@@ -3,10 +3,7 @@ import { inngest } from "../inngest/index.js";
 import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import Config from "../models/Config.js";
-import {
-  creditCompOffForAttendance,
-  getCompOffLabelForDate,
-} from "../utils/compOff.js";
+import { getCompOffLabelForDate } from "../utils/compOff.js";
 import ExcelJS from "exceljs";
 import {
   UserRole,
@@ -15,6 +12,10 @@ import {
   CompOffType,
   ReportExportType,
 } from "../constants/enums.js";
+import {
+  getAttendanceShiftConfig,
+  determineAttendanceDayType,
+} from "../utils/shiftConfig.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -82,10 +83,17 @@ export const clockInOut = async (req, res) => {
       const userLat = req.body?.latitude;
       const userLng = req.body?.longitude;
 
-      if (!userLat || !userLng) {
+      if (
+        userLat === undefined ||
+        userLat === null ||
+        userLng === undefined ||
+        userLng === null ||
+        isNaN(Number(userLat)) ||
+        isNaN(Number(userLng))
+      ) {
         return res
           .status(400)
-          .json({ error: "Location is required to punch in/out" });
+          .json({ error: "Location is required to punch in/out. Please enable GPS/location on your device." });
       }
 
       // Haversine formula
@@ -126,8 +134,12 @@ export const clockInOut = async (req, res) => {
         (openRecord.checkOut - openRecord.checkIn) / (1000 * 60 * 60),
       );
       openRecord.workingHours = parseFloat(duration.toFixed(2));
-      openRecord.dayType =
-        openRecord.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+      const shiftConfig = await getAttendanceShiftConfig();
+      const { dayType } = determineAttendanceDayType(
+        openRecord.workingHours,
+        shiftConfig,
+      );
+      openRecord.dayType = dayType;
       await openRecord.save();
       // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       return res.json({ success: true, type: "CHECK_OUT", data: openRecord });
@@ -159,13 +171,10 @@ export const clockInOut = async (req, res) => {
       (existing.status === AttendanceStatus.HOLIDAY || existing.status === AttendanceStatus.WEEK_OFF) &&
       !existing.checkIn
     ) {
-      const originalStatus = existing.status;
+      const compoffLabel = await getCompOffLabelForDate(todayStart);
       existing.checkIn = now;
       existing.status = AttendanceStatus.PRESENT;
-      existing.compoffFor =
-        originalStatus === AttendanceStatus.HOLIDAY
-          ? CompOffType.HOLIDAY
-          : CompOffType.WEEK_OFF;
+      existing.compoffFor = compoffLabel;
       await existing.save();
 
       await sendCheckOutEvent(existing);
@@ -217,7 +226,8 @@ export const getAttendance = async (req, res) => {
     const todayStart = moment.tz(TZ).startOf("day").toDate();
     const todayEnd = moment.tz(TZ).endOf("day").toDate();
 
-    const [results, todayRecord] = await Promise.all([
+    const [shiftConfig, results, todayRecord] = await Promise.all([
+      getAttendanceShiftConfig(),
       Attendance.aggregate([
         {
           $match: {
@@ -237,14 +247,8 @@ export const getAttendance = async (req, res) => {
                       $cond: [
                         {
                           $and: [
-                            { $eq: ["$status", "PRESENT"] },
-                            { $ne: ["$dayType", "Half Day"] },
-                            {
-                              $or: [
-                                { $eq: ["$workingHours", null] },
-                                { $gte: ["$workingHours", 8] },
-                              ],
-                            },
+                            { $eq: ["$status", AttendanceStatus.PRESENT] },
+                            { $ne: ["$dayType", DayType.HALF_DAY] },
                           ],
                         },
                         1,
@@ -266,14 +270,8 @@ export const getAttendance = async (req, res) => {
                       $cond: [
                         {
                           $or: [
-                            { $eq: ["$dayType", "Half Day"] },
-                            {
-                              $and: [
-                                { $eq: ["$status", "PRESENT"] },
-                                { $ne: ["$workingHours", null] },
-                                { $lt: ["$workingHours", 8] },
-                              ],
-                            },
+                            { $eq: ["$dayType", DayType.HALF_DAY] },
+                            { $eq: ["$status", AttendanceStatus.HALF_DAY] },
                           ],
                         },
                         1,
@@ -316,6 +314,7 @@ export const getAttendance = async (req, res) => {
       data: history,
       todayRecord,
       stats,
+      shiftConfig,
       employee: { isDeleted: employee.isDeleted },
     });
   } catch (error) {
@@ -354,11 +353,9 @@ export const adminClockInOut = async (req, res) => {
     attendance.checkIn = checkInTime;
     attendance.checkOut = checkOutTime;
     attendance.status = status || AttendanceStatus.PRESENT;
-    attendance.dayType = dayType || DayType.FULL_DAY;
     attendance.compoffFor = compoffFor || "";
     attendance.updatedBy = req.session.email;
     attendance.adminUpdatedAt = new Date();
-
     if (checkInTime && checkOutTime) {
       if (checkOutTime < checkInTime) {
         checkOutTime.setDate(checkOutTime.getDate() + 1);
@@ -371,6 +368,18 @@ export const adminClockInOut = async (req, res) => {
         (checkOutTime - checkInTime) / (1000 * 60 * 60),
       );
       attendance.workingHours = parseFloat(duration.toFixed(2));
+    }
+
+    if (dayType) {
+      attendance.dayType = dayType;
+    } else if (attendance.workingHours !== null && attendance.workingHours !== undefined) {
+      const shiftConfig = await getAttendanceShiftConfig();
+      attendance.dayType = determineAttendanceDayType(
+        attendance.workingHours,
+        shiftConfig,
+      ).dayType;
+    } else {
+      attendance.dayType = DayType.FULL_DAY;
     }
 
     await attendance.save();

@@ -4,10 +4,16 @@ import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import Config from "../models/Config.js";
 import CronLog from "../models/CronLog.js";
-import { isWeekOffDate } from "../utils/weekOff.js";
-import { findHolidayForDate } from "../utils/holiday.js";
-import { DayType, AttendanceStatus } from "../constants/enums.js";
+import Holiday from "../models/Holiday.js";
+import CalendarOverride from "../models/CalendarOverride.js";
+import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
+import { AttendanceStatus } from "../constants/enums.js";
 import { sendDailyAutomatedCelebrationWishes } from "../utils/celebrations.js";
+import {
+  getAttendanceShiftConfig,
+  determineAttendanceDayType,
+  getShiftEndMoment,
+} from "../utils/shiftConfig.js";
 
 const TIMEZONE = process.env.CRON_TIMEZONE || "Asia/Kolkata";
 const SCHEDULE = process.env.ATTENDANCE_CRON_SCHEDULE || "30 0 * * *";
@@ -24,12 +30,12 @@ const autoPunchOutMissedCheckouts = async (todayStart, logDetails) => {
       checkOut: null,
     });
 
+    const shiftConfig = await getAttendanceShiftConfig();
+
     for (const record of unclosedRecords) {
       try {
         const checkInMoment = moment(record.checkIn).tz(TIMEZONE);
-        let checkOutMoment = checkInMoment
-          .clone()
-          .set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+        let checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
 
         if (checkOutMoment.isSameOrBefore(checkInMoment)) {
           checkOutMoment.add(1, "day");
@@ -41,8 +47,11 @@ const autoPunchOutMissedCheckouts = async (todayStart, logDetails) => {
           (record.checkOut - record.checkIn) / (1000 * 60 * 60),
         );
         record.workingHours = parseFloat(duration.toFixed(2));
-        record.dayType =
-          record.workingHours >= 8 ? DayType.FULL_DAY : DayType.HALF_DAY;
+        const { dayType } = determineAttendanceDayType(
+          record.workingHours,
+          shiftConfig,
+        );
+        record.dayType = dayType;
         record.status = AttendanceStatus.PRESENT;
         record.updatedBy = "System";
         record.adminUpdatedAt = new Date();
@@ -53,7 +62,7 @@ const autoPunchOutMissedCheckouts = async (todayStart, logDetails) => {
           employeeId: record.employeeId,
           action: "UPDATED",
           status: AttendanceStatus.PRESENT,
-          reason: "Auto punch-out for missed checkout at 07:00 PM",
+          reason: `Auto punch-out for missed checkout at ${shiftConfig.endTime || "07:00 PM"}`,
         });
       } catch (err) {
         logDetails.push({
@@ -138,10 +147,30 @@ const createTodayPlaceholders = async (
     todayRecords.map((record) => [record.employeeId.toString(), record]),
   );
 
-  const holiday = await findHolidayForDate(todayStart, TIMEZONE);
-  const config = await Config.findOne({ key: "weekOffDays" });
-  const dayName = moment(todayStart).tz(TIMEZONE).format("dddd");
-  const isWeekOff = isWeekOffDate(todayStart, config?.value, TIMEZONE);
+  const todayEnd = moment.tz(todayStart, TIMEZONE).endOf("day").toDate();
+  const [holidays, config, overrides] = await Promise.all([
+    Holiday.find({ date: { $gte: todayStart, $lte: todayEnd } }).lean(),
+    Config.findOne({ key: "weekOffDays" }).lean(),
+    CalendarOverride.find({
+      $or: [
+        { date: { $gte: todayStart, $lte: todayEnd } },
+        { swapDate: { $gte: todayStart, $lte: todayEnd } },
+      ],
+    }).lean(),
+  ]);
+
+  const schedule = getCalendarDaySchedule(todayStart, {
+    overrides,
+    holidays,
+    weekOffConfig: config?.value,
+    timezone: TIMEZONE,
+  });
+
+  const status = schedule.isHoliday
+    ? "HOLIDAY"
+    : schedule.isWeekOff
+      ? "WEEK_OFF"
+      : "NOT_MARKED";
 
   for (const employee of activeEmployees) {
     const existingToday = existingTodayMap.get(employee._id.toString());
@@ -155,11 +184,6 @@ const createTodayPlaceholders = async (
 
     try {
       if (!existingToday) {
-        const status = holiday
-          ? "HOLIDAY"
-          : isWeekOff
-            ? "WEEK_OFF"
-            : "NOT_MARKED";
         await Attendance.create({
           employeeId: employee._id,
           date: todayStart,
@@ -167,11 +191,7 @@ const createTodayPlaceholders = async (
         });
         detail.action = "CREATED";
         detail.status = status;
-        detail.reason = holiday
-          ? `Public Holiday: ${holiday.name}`
-          : isWeekOff
-            ? `Weekly Off: ${dayName}`
-            : "Standard Work Day";
+        detail.reason = schedule.label || (schedule.isWorkingDay ? "Standard Work Day" : "Company Off");
       } else {
         detail.reason = "Record already exists";
       }

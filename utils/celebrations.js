@@ -1,6 +1,5 @@
 import moment from "moment-timezone";
 import Employee from "../models/Employee.js";
-import Department from "../models/Department.js";
 import sendEmail from "../config/nodemailer.js";
 import {
   getBirthdayWishEmail,

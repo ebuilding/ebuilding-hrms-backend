@@ -20,6 +20,7 @@ const employeeSchema = new mongoose.Schema(
     phone: { type: String, required: true },
     position: { type: String, required: true },
     shiftHours: { type: Number, default: 0 },
+    customShiftEnabled: { type: Boolean, default: false },
     basicSalary: { type: Number, default: 0 },
     allowances: { type: Number, default: 0 },
     deductions: { type: Number, default: 0 },

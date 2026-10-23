@@ -4,12 +4,16 @@ import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import Payslip from "../models/Payslip.js";
-import Holiday from "../models/Holiday.js";
 import { processPaidLeaveGrants } from "../utils/paidLeave.js";
 import { AttendanceStatus } from "../constants/enums.js";
 
 import RegistrationInvite from "../models/RegistrationInvite.js";
 import { getCelebrationsData } from "../utils/celebrations.js";
+import {
+  getAttendanceShiftConfig,
+  calculateLateArrival,
+  calculateMonthWorkingDaysAndTarget,
+} from "../utils/shiftConfig.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -132,13 +136,16 @@ export const getDashboard = async (req, res) => {
         ]),
       );
 
+      // Fetch dynamic shift config (shift start + grace period)
+      const shiftConfig = await getAttendanceShiftConfig();
+
       // List of employees who punched in today
       const punchedInList = todayAttendanceRecords
         .filter((rec) => rec.employeeId && rec.checkIn)
         .map((rec) => {
           const mIn = moment(rec.checkIn).tz(TZ);
           const mOut = rec.checkOut ? moment(rec.checkOut).tz(TZ) : null;
-          const isLate = mIn.hour() > 9 || (mIn.hour() === 9 && mIn.minute() > 30);
+          const lateInfo = calculateLateArrival(rec.checkIn, shiftConfig);
           return {
             id: rec._id,
             employeeId: rec.employeeId._id,
@@ -148,7 +155,12 @@ export const getDashboard = async (req, res) => {
             profile_img: rec.employeeId.profile_img || "",
             checkInTime: mIn.format("hh:mm A"),
             checkOutTime: mOut ? mOut.format("hh:mm A") : null,
-            isLate,
+            isLate: lateInfo.isLate,
+            lateMinutes: lateInfo.lateMinutes,
+            minutesFromShiftStart: lateInfo.minutesFromShiftStart,
+            graceMinutes: lateInfo.graceMinutes,
+            scheduledStartTime: lateInfo.scheduledStartTime,
+            graceThresholdTime: lateInfo.graceThresholdTime,
             status: rec.status,
           };
         });
@@ -200,17 +212,16 @@ export const getDashboard = async (req, res) => {
         }),
       );
 
-      // Process late arrivals (clocked in after 09:30 AM IST)
+      // Process late arrivals dynamically using shiftConfig (shift start + grace period)
       const lateArrivals = todayAttendanceRecords
         .filter((rec) => {
           if (!rec.checkIn || !rec.employeeId) return false;
-          const m = moment(rec.checkIn).tz(TZ);
-          return m.hour() > 9 || (m.hour() === 9 && m.minute() > 30);
+          const { isLate } = calculateLateArrival(rec.checkIn, shiftConfig);
+          return isLate;
         })
         .map((rec) => {
           const m = moment(rec.checkIn).tz(TZ);
-          const scheduledStart = m.clone().hour(9).minute(30).second(0);
-          const lateMinutes = Math.max(1, m.diff(scheduledStart, "minutes"));
+          const lateInfo = calculateLateArrival(rec.checkIn, shiftConfig);
           return {
             id: rec._id,
             employeeId: rec.employeeId?._id,
@@ -219,7 +230,11 @@ export const getDashboard = async (req, res) => {
             department: rec.employeeId?.department?.name || "General",
             profile_img: rec.employeeId?.profile_img || "",
             checkInTime: m.format("hh:mm A"),
-            lateMinutes,
+            lateMinutes: lateInfo.lateMinutes,
+            minutesFromShiftStart: lateInfo.minutesFromShiftStart,
+            graceMinutes: lateInfo.graceMinutes,
+            scheduledStartTime: lateInfo.scheduledStartTime,
+            graceThresholdTime: lateInfo.graceThresholdTime,
           };
         });
 
@@ -352,18 +367,26 @@ export const getDashboard = async (req, res) => {
       const todayStart = moment.tz(TZ).startOf("day").toDate();
       const todayEnd = moment.tz(TZ).endOf("day").toDate();
 
+      // Fetch shift configuration and calculate monthly target hours
+      const shiftConfig = await getAttendanceShiftConfig();
+      const customDailyHours =
+        employee.customShiftEnabled && employee.shiftHours && employee.shiftHours > 0
+          ? employee.shiftHours
+          : null;
+      const { workingDaysCount, dailyHours, targetHours } =
+        await calculateMonthWorkingDaysAndTarget(now, shiftConfig, customDailyHours);
+
       const [
-        currentMonthAttendance,
+        monthAttendances,
         pendingLeaves,
         latestPayslip,
         todayRecord,
         nonWorkingDaysCount,
       ] = await Promise.all([
-        Attendance.countDocuments({
+        Attendance.find({
           employeeId: employee._id,
           date: { $gte: startOfMonth, $lte: endOfMonth },
-          status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
-        }),
+        }).lean(),
         LeaveApplication.countDocuments({
           employeeId: employee._id,
           status: "PENDING",
@@ -382,22 +405,31 @@ export const getDashboard = async (req, res) => {
         }),
       ]);
 
-      // Simple stats aggregation
-      const monthlyStats = await Attendance.aggregate([
-        {
-          $match: {
-            employeeId: employee._id,
-            date: { $gte: startOfMonth, $lte: endOfMonth },
-            status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY] },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            totalHours: { $sum: "$workingHours" },
-          },
-        },
-      ]);
+      // Calculate total worked minutes and present credit identically to attendanceReport
+      let totalMinutesWorked = 0;
+      let presentDaysCount = 0;
+      const minFullMinutes = ((Number(shiftConfig.minHoursForFullDay) || 4) * 60);
+
+      for (const att of monthAttendances) {
+        let dayMinutes = 0;
+        if (typeof att.workingHours === "number" && !isNaN(att.workingHours)) {
+          dayMinutes = Math.round(att.workingHours * 60);
+        } else if (att.checkIn && att.checkOut) {
+          dayMinutes = Math.max(
+            0,
+            Math.round((new Date(att.checkOut) - new Date(att.checkIn)) / 60000),
+          );
+        }
+
+        if (dayMinutes > 0) {
+          totalMinutesWorked += dayMinutes;
+          presentDaysCount += dayMinutes >= minFullMinutes ? 1 : 0.5;
+        } else if (att.status === AttendanceStatus.PRESENT) {
+          presentDaysCount += 1;
+        } else if (att.status === AttendanceStatus.HALF_DAY) {
+          presentDaysCount += 0.5;
+        }
+      }
 
       // January Allowance Logic (Jan 15 - Jan 20)
       let januaryAllowance = null;
@@ -412,19 +444,41 @@ export const getDashboard = async (req, res) => {
         }
       }
 
+      const totalHoursWorked = parseFloat((totalMinutesWorked / 60).toFixed(2));
+      const targetMonthHours = targetHours;
+      const hoursProgressPercentage =
+        targetMonthHours > 0
+          ? Math.min(
+              100,
+              parseFloat(((totalHoursWorked / targetMonthHours) * 100).toFixed(1)),
+            )
+          : 0;
+      const remainingHours = Math.max(
+        0,
+        parseFloat((targetMonthHours - totalHoursWorked).toFixed(2)),
+      );
+
       // Calculate Expected Working Days
       const daysPassed = now.date();
       const expectedWorkingDays = Math.max(1, daysPassed - nonWorkingDaysCount);
       const calculatedPercentage =
-        Math.round((currentMonthAttendance / expectedWorkingDays) * 100) || 0;
+        Math.round((presentDaysCount / expectedWorkingDays) * 100) || 0;
 
       return res.json({
         role: "EMPLOYEE",
         employee: { ...employee, id: employee._id.toString() },
+        shiftConfig,
         stats: {
-          currentMonthAttendance,
+          currentMonthAttendance: presentDaysCount,
           pendingLeaves,
-          totalHours: monthlyStats[0]?.totalHours || 0,
+          totalHours: totalHoursWorked,
+          targetMonthHours,
+          workingDaysInMonth: workingDaysCount,
+          dailyShiftHours: dailyHours,
+          hoursProgressPercentage,
+          remainingHours,
+          minHoursForFullDay: shiftConfig.minHoursForFullDay,
+          shiftPolicyNote: `If any day has fewer hours, you can make up the hours on other days to complete your target monthly hours. Days with ${shiftConfig.minHoursForFullDay || 4}+ hours count as present.`,
           attendancePercentage: Math.min(100, calculatedPercentage),
         },
         todayRecord,

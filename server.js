@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import multer from "multer";
 import connectDB from "./config/db.js";
 import authRouter from "./routes/authRoutes.js";
 import employeesRouter from "./routes/employeeRoutes.js";
@@ -19,6 +18,7 @@ import leavePolicyRouter from "./routes/leavePolicyRoutes.js";
 import documentRouter from "./routes/documentRoutes.js";
 import inviteRouter from "./routes/inviteRoutes.js";
 import compOffRouter from "./routes/compOffRoutes.js";
+import calendarOverrideRouter from "./routes/calendarOverrideRoutes.js";
 
 import { serve } from "inngest/express";
 import { inngest, functions } from "./inngest/index.js";
@@ -53,6 +53,7 @@ app.use("/api/tasksheet", taskSheetRouter);
 app.use("/api/leave-policy", leavePolicyRouter);
 app.use("/api/documents", documentRouter);
 app.use("/api/compoff", compOffRouter);
+app.use("/api/calendar-overrides", calendarOverrideRouter);
 
 app.use("/api/inngest", serve({ client: inngest, functions }));
 
