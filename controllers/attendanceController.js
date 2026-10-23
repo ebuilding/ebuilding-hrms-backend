@@ -82,10 +82,17 @@ export const clockInOut = async (req, res) => {
       const userLat = req.body?.latitude;
       const userLng = req.body?.longitude;
 
-      if (!userLat || !userLng) {
+      if (
+        userLat === undefined ||
+        userLat === null ||
+        userLng === undefined ||
+        userLng === null ||
+        isNaN(Number(userLat)) ||
+        isNaN(Number(userLng))
+      ) {
         return res
           .status(400)
-          .json({ error: "Location is required to punch in/out" });
+          .json({ error: "Location is required to punch in/out. Please enable GPS/location on your device." });
       }
 
       // Haversine formula
