@@ -328,7 +328,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
     });
 
     const hasAttendanceData = empAttendancesMap.size > 0 || totalWorkedMinutes > 0;
-    
+
     // Expected hours calculation:
     // "expected hours is total working day * compnay hours (9). Hours worked is toal punch in out time sum house."
     // Working days excluding approved leaves:

@@ -449,9 +449,9 @@ export const getDashboard = async (req, res) => {
       const hoursProgressPercentage =
         targetMonthHours > 0
           ? Math.min(
-              100,
-              parseFloat(((totalHoursWorked / targetMonthHours) * 100).toFixed(1)),
-            )
+            100,
+            parseFloat(((totalHoursWorked / targetMonthHours) * 100).toFixed(1)),
+          )
           : 0;
       const remainingHours = Math.max(
         0,
