@@ -52,17 +52,17 @@ export const createCalendarOverride = async (req, res) => {
       return res.status(400).json({ error: "Date is required" });
     }
 
-    const todayStart = moment.tz(TIMEZONE).startOf("day");
+    const minAllowedDate = moment.tz(TIMEZONE).startOf("year");
     const targetMoment = moment.tz(date, "YYYY-MM-DD", TIMEZONE).startOf("day");
 
     if (!targetMoment.isValid()) {
       return res.status(400).json({ error: "Invalid date format. Expected YYYY-MM-DD" });
     }
 
-    // Constraint: Only today and future dates can be overridden
-    if (targetMoment.isBefore(todayStart, "day")) {
+    // Allow Admin to record overrides within the current calendar year
+    if (targetMoment.isBefore(minAllowedDate, "day")) {
       return res.status(400).json({
-        error: "Cannot create schedule overrides for past dates. Only today or future dates are allowed.",
+        error: "Cannot create schedule overrides for past years. Overrides must be within the current calendar year.",
       });
     }
 
@@ -82,9 +82,9 @@ export const createCalendarOverride = async (req, res) => {
         return res.status(400).json({ error: "Invalid swapDate format. Expected YYYY-MM-DD" });
       }
 
-      if (swapMoment.isBefore(todayStart, "day")) {
+      if (swapMoment.isBefore(minAllowedDate, "day")) {
         return res.status(400).json({
-          error: "Compensatory working date cannot be in the past.",
+          error: "Compensatory working date must be within the current calendar year.",
         });
       }
 
@@ -227,12 +227,12 @@ export const deleteCalendarOverride = async (req, res) => {
       return res.status(404).json({ error: "Schedule override not found" });
     }
 
-    const todayStart = moment.tz(TIMEZONE).startOf("day");
+    const minAllowedDate = moment.tz(TIMEZONE).startOf("year");
     const targetMoment = moment(override.date).tz(TIMEZONE).startOf("day");
 
-    if (targetMoment.isBefore(todayStart, "day")) {
+    if (targetMoment.isBefore(minAllowedDate, "day")) {
       return res.status(400).json({
-        error: "Historical schedule overrides in the past cannot be deleted.",
+        error: "Historical schedule overrides from previous years cannot be deleted.",
       });
     }
 
