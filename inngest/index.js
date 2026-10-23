@@ -469,6 +469,8 @@ const attendanceReminderCron = inngest.createFunction(
       await step.run("send-reminder-emails", async () => {
         const todayStr = moment().tz(TZ).format("MMMM DD, YYYY");
         const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const shiftConfig = await getAttendanceShiftConfig();
+        const deadlineStr = shiftConfig?.startTime || "10:00 AM";
         const emailPromises = absentEmployees.map((emp) => {
           return sendEmail({
             to: emp.email,
@@ -515,7 +517,7 @@ const attendanceReminderCron = inngest.createFunction(
     font-size:14px;
     line-height:1.7;
   ">
-    The check-in deadline was 10:00 AM IST.
+    The check-in deadline was ${deadlineStr} IST.
     Please mark your attendance as soon as possible.
   </div>
 

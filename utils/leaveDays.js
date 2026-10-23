@@ -3,6 +3,9 @@ import Config from "../models/Config.js";
 import Holiday from "../models/Holiday.js";
 import { isWeekOffDate } from "./weekOff.js";
 
+import CalendarOverride from "../models/CalendarOverride.js";
+import { getCalendarDaySchedule } from "./calendarSchedule.js";
+
 const TIMEZONE = "Asia/Kolkata";
 
 export const getWorkingLeaveDays = async ({
@@ -20,7 +23,7 @@ export const getWorkingLeaveDays = async ({
     throw new Error("Half-day leave must be for one date");
   }
 
-  const [config, holidays] = await Promise.all([
+  const [config, holidays, overrides] = await Promise.all([
     Config.findOne({ key: "weekOffDays" }).lean(),
     Holiday.find({
       date: {
@@ -28,22 +31,38 @@ export const getWorkingLeaveDays = async ({
         $lt: end.clone().add(1, "day").toDate(),
       },
     }).lean(),
+    CalendarOverride.find({
+      $or: [
+        {
+          date: {
+            $gte: start.toDate(),
+            $lt: end.clone().add(1, "day").toDate(),
+          },
+        },
+        {
+          swapDate: {
+            $gte: start.toDate(),
+            $lt: end.clone().add(1, "day").toDate(),
+          },
+        },
+      ],
+    }).lean(),
   ]);
-  const holidayDates = new Set(
-    holidays.map((holiday) =>
-      moment(holiday.date).tz(TIMEZONE).format("YYYY-MM-DD"),
-    ),
-  );
 
   const workingDates = [];
   const current = start.clone();
   while (current.isSameOrBefore(end, "day")) {
     const day = current.clone();
-    const dateKey = day.format("YYYY-MM-DD");
-    const isHoliday = holidayDates.has(dateKey);
-    const isWeekOff = isWeekOffDate(day.toDate(), config?.value, TIMEZONE);
+    const schedule = getCalendarDaySchedule(day, {
+      overrides,
+      holidays,
+      weekOffConfig: config?.value,
+      timezone: TIMEZONE,
+    });
 
-    if (!isHoliday && !isWeekOff) workingDates.push(day.toDate());
+    if (schedule.isWorkingDay) {
+      workingDates.push(day.toDate());
+    }
     current.add(1, "day");
   }
 

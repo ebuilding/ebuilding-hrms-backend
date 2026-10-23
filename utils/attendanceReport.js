@@ -4,7 +4,9 @@ import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
 import Config from "../models/Config.js";
 import LeaveApplication from "../models/LeaveApplication.js";
+import CalendarOverride from "../models/CalendarOverride.js";
 import { isWeekOffDate } from "./weekOff.js";
+import { getCalendarDaySchedule } from "./calendarSchedule.js";
 import {
   AttendanceStatus,
   AttendanceStatusLabel,
@@ -52,12 +54,18 @@ export const calculateMonthlyReportData = async (monthStr) => {
   const endOfMonth = startOfMonth.clone().endOf("month");
   const daysInMonth = startOfMonth.daysInMonth();
 
-  // 1. Fetch Config, Holidays, Active Employees, Attendance, Approved Leaves, and Shift Config
-  const [weekOffConfig, holidays, employees, attendances, approvedLeaves, shiftConfig] =
+  // 1. Fetch Config, Holidays, Overrides, Active Employees, Attendance, Approved Leaves, and Shift Config
+  const [weekOffConfig, holidays, overrides, employees, attendances, approvedLeaves, shiftConfig] =
     await Promise.all([
       Config.findOne({ key: "weekOffDays" }).lean(),
       Holiday.find({
         date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
+      }).lean(),
+      CalendarOverride.find({
+        $or: [
+          { date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+          { swapDate: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+        ],
       }).lean(),
       Employee.find({
         isDeleted: false,
@@ -84,36 +92,34 @@ export const calculateMonthlyReportData = async (monthStr) => {
   const defaultShiftHours = Number(shiftConfig?.shiftHours) || 9;
   const minFullDayMinutes = (Number(shiftConfig?.minHoursForFullDay) || 4) * 60;
 
-  // Holiday Map (YYYY-MM-DD -> Holiday Name)
-  const holidayMap = new Map();
-  for (const h of holidays) {
-    const dStr = moment(h.date).tz(TZ).format("YYYY-MM-DD");
-    holidayMap.set(dStr, h.name || "Holiday");
-  }
-
   const weekOffSchedule = weekOffConfig?.value || { weeklyDays: ["Sunday"] };
 
-  // Company default working days in this month (excluding weekends/holidays)
+  // Company default working days in this month
   let companyWorkingDays = 0;
   const monthDaysMeta = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dayMoment = startOfMonth.clone().date(d);
-    const dateKey = dayMoment.format("YYYY-MM-DD");
-    const dayName = dayMoment.format("dddd");
-    const isHoliday = holidayMap.has(dateKey);
-    const isWeekOff = isWeekOffDate(dayMoment.toDate(), weekOffSchedule, TZ);
-    const isCompanyWorkingDay = !isHoliday && !isWeekOff;
+    const daySchedule = getCalendarDaySchedule(dayMoment, {
+      overrides,
+      holidays,
+      weekOffConfig: weekOffSchedule,
+      timezone: TZ,
+    });
 
-    if (isCompanyWorkingDay) companyWorkingDays++;
+    if (daySchedule.isWorkingDay) {
+      companyWorkingDays++;
+    }
 
     monthDaysMeta.push({
-      dateKey,
-      dayMoment,
-      dayName,
-      isHoliday,
-      holidayName: holidayMap.get(dateKey) || null,
-      isWeekOff,
-      isCompanyWorkingDay,
+      dateKey: daySchedule.dateKey,
+      dayMoment: daySchedule.dayMoment,
+      dayName: daySchedule.dayName,
+      isHoliday: daySchedule.isHoliday,
+      holidayName: daySchedule.label || null,
+      isWeekOff: daySchedule.isWeekOff,
+      isCompanyWorkingDay: daySchedule.isWorkingDay,
+      isOverride: daySchedule.isOverride,
+      overrideType: daySchedule.overrideType,
     });
   }
 

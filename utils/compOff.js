@@ -3,9 +3,10 @@ import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import Config from "../models/Config.js";
 import LeaveApplication from "../models/LeaveApplication.js";
+import CalendarOverride from "../models/CalendarOverride.js";
 import { isWeekOffDate } from "./weekOff.js";
 import { findHolidayForDate } from "./holiday.js";
-import { DayType, CompOffType } from "../constants/enums.js";
+import { DayType, CompOffType, CalendarOverrideType } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -31,10 +32,45 @@ export const getCompOffCreditDays = (attendance) => {
 };
 
 export const getCompOffLabelForDate = async (date) => {
-  const dayStart = moment(date).tz(TZ).startOf("day").toDate();
+  const dayMoment = moment(date).tz(TZ);
+  const dayStart = dayMoment.clone().startOf("day").toDate();
+  const dayEnd = dayMoment.clone().endOf("day").toDate();
+
+  // 1. Check Calendar Overrides
+  const override = await CalendarOverride.findOne({
+    $or: [
+      { date: { $gte: dayStart, $lte: dayEnd } },
+      { swapDate: { $gte: dayStart, $lte: dayEnd } },
+    ],
+  }).lean();
+
+  if (override) {
+    const isOverrideDate = moment(override.date).tz(TZ).isSame(dayMoment, "day");
+    const isSwapDate = override.swapDate && moment(override.swapDate).tz(TZ).isSame(dayMoment, "day");
+
+    // If this date is a mandatory working day (WORKING_DAY or compensatory swapDate):
+    if (
+      override.type === CalendarOverrideType.WORKING_DAY ||
+      (override.type === CalendarOverrideType.SWAP && isSwapDate)
+    ) {
+      // Mandatory work shift - not eligible for comp-off
+      return null;
+    }
+
+    // If this date is an off-day (HOLIDAY or original swap off-day):
+    if (
+      override.type === CalendarOverrideType.HOLIDAY ||
+      (override.type === CalendarOverrideType.SWAP && isOverrideDate)
+    ) {
+      return CompOffType.HOLIDAY;
+    }
+  }
+
+  // 2. Check Official Company Holidays
   const holiday = await findHolidayForDate(dayStart, TZ);
   if (holiday) return CompOffType.HOLIDAY;
 
+  // 3. Check Week Off Configuration
   const config = await Config.findOne({ key: "weekOffDays" }).lean();
   if (isWeekOffDate(dayStart, config?.value, TZ)) return CompOffType.WEEK_OFF;
 

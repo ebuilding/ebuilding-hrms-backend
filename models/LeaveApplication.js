@@ -34,9 +34,12 @@ const leaveApplicationSchema = new mongoose.Schema(
     reason: { type: String, required: true },
     status: {
       type: String,
-      enum: ["PENDING", "APPROVED", "REJECTED"],
+      enum: ["PENDING", "APPROVED", "REJECTED", "REVERTED"],
       default: "PENDING",
     },
+    revertReason: { type: String, default: null },
+    revertedAt: { type: Date, default: null },
+    revertedDates: { type: [Date], default: [] },
     addedBy: { type: String, default: null },
     adminUpdatedAt: { type: Date, default: null },
   },

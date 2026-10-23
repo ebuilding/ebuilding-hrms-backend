@@ -136,13 +136,16 @@ export const getDashboard = async (req, res) => {
         ]),
       );
 
+      // Fetch dynamic shift config (shift start + grace period)
+      const shiftConfig = await getAttendanceShiftConfig();
+
       // List of employees who punched in today
       const punchedInList = todayAttendanceRecords
         .filter((rec) => rec.employeeId && rec.checkIn)
         .map((rec) => {
           const mIn = moment(rec.checkIn).tz(TZ);
           const mOut = rec.checkOut ? moment(rec.checkOut).tz(TZ) : null;
-          const isLate = mIn.hour() > 9 || (mIn.hour() === 9 && mIn.minute() > 30);
+          const lateInfo = calculateLateArrival(rec.checkIn, shiftConfig);
           return {
             id: rec._id,
             employeeId: rec.employeeId._id,
@@ -152,7 +155,12 @@ export const getDashboard = async (req, res) => {
             profile_img: rec.employeeId.profile_img || "",
             checkInTime: mIn.format("hh:mm A"),
             checkOutTime: mOut ? mOut.format("hh:mm A") : null,
-            isLate,
+            isLate: lateInfo.isLate,
+            lateMinutes: lateInfo.lateMinutes,
+            minutesFromShiftStart: lateInfo.minutesFromShiftStart,
+            graceMinutes: lateInfo.graceMinutes,
+            scheduledStartTime: lateInfo.scheduledStartTime,
+            graceThresholdTime: lateInfo.graceThresholdTime,
             status: rec.status,
           };
         });
@@ -205,7 +213,6 @@ export const getDashboard = async (req, res) => {
       );
 
       // Process late arrivals dynamically using shiftConfig (shift start + grace period)
-      const shiftConfig = await getAttendanceShiftConfig();
       const lateArrivals = todayAttendanceRecords
         .filter((rec) => {
           if (!rec.checkIn || !rec.employeeId) return false;
@@ -214,7 +221,7 @@ export const getDashboard = async (req, res) => {
         })
         .map((rec) => {
           const m = moment(rec.checkIn).tz(TZ);
-          const { lateMinutes } = calculateLateArrival(rec.checkIn, shiftConfig);
+          const lateInfo = calculateLateArrival(rec.checkIn, shiftConfig);
           return {
             id: rec._id,
             employeeId: rec.employeeId?._id,
@@ -223,7 +230,11 @@ export const getDashboard = async (req, res) => {
             department: rec.employeeId?.department?.name || "General",
             profile_img: rec.employeeId?.profile_img || "",
             checkInTime: m.format("hh:mm A"),
-            lateMinutes,
+            lateMinutes: lateInfo.lateMinutes,
+            minutesFromShiftStart: lateInfo.minutesFromShiftStart,
+            graceMinutes: lateInfo.graceMinutes,
+            scheduledStartTime: lateInfo.scheduledStartTime,
+            graceThresholdTime: lateInfo.graceThresholdTime,
           };
         });
 

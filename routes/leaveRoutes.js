@@ -7,15 +7,18 @@ import {
   adminCreateLeave,
   getOnLeaveToday,
   getLeaveCalendar,
+  calculateLeaveDays,
 } from "../controllers/leaveController.js";
 
 const leaveRouter = Router();
 
 leaveRouter.get("/today", protect, protectAdmin, getOnLeaveToday);
 leaveRouter.get("/calendar", protect, getLeaveCalendar);
+leaveRouter.get("/calculate-days", protect, calculateLeaveDays);
 leaveRouter.post("/", protect, createLeave);
 leaveRouter.post("/admin", protect, protectAdmin, adminCreateLeave);
 leaveRouter.get("/", protect, getLeaves);
 leaveRouter.patch("/:id", protect, protectAdmin, updateLeaveStatus);
 
 export default leaveRouter;
+

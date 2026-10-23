@@ -1,7 +1,9 @@
 import moment from "moment-timezone";
 import Config from "../models/Config.js";
 import Holiday from "../models/Holiday.js";
+import CalendarOverride from "../models/CalendarOverride.js";
 import { isWeekOffDate } from "./weekOff.js";
+import { resolveMonthSchedule } from "./calendarSchedule.js";
 import { DayType, AttendanceStatus } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
@@ -40,7 +42,14 @@ export const getAttendanceShiftConfig = async () => {
  * Calculates whether a check-in is late based on dynamic shift start and grace minutes
  */
 export const calculateLateArrival = (checkInDate, shiftConfig) => {
-  if (!checkInDate) return { isLate: false, lateMinutes: 0 };
+  if (!checkInDate) {
+    return {
+      isLate: false,
+      lateMinutes: 0,
+      minutesFromShiftStart: 0,
+      graceMinutes: 0,
+    };
+  }
 
   const m = moment(checkInDate).tz(TZ);
   const cfg = shiftConfig || DEFAULT_SHIFT_CONFIG;
@@ -51,17 +60,40 @@ export const calculateLateArrival = (checkInDate, shiftConfig) => {
     : moment.tz(`${m.format("YYYY-MM-DD")} ${cfg.startTime}`, "YYYY-MM-DD HH:mm", TZ);
 
   if (!scheduledStart.isValid()) {
-    return { isLate: false, lateMinutes: 0 };
+    return {
+      isLate: false,
+      lateMinutes: 0,
+      minutesFromShiftStart: 0,
+      graceMinutes: 0,
+    };
   }
 
-  const graceThreshold = scheduledStart.clone().add(cfg.graceMinutes || 0, "minutes");
+  const graceMinutes = Number(cfg.graceMinutes) || 0;
+  const graceThreshold = scheduledStart.clone().add(graceMinutes, "minutes");
 
   if (m.isAfter(graceThreshold)) {
-    const lateMinutes = Math.max(1, m.diff(scheduledStart, "minutes"));
-    return { isLate: true, lateMinutes, scheduledStartTime: scheduledStart.format("hh:mm A") };
+    // lateMinutes measures how many minutes the check-in exceeded the allowed grace window
+    const lateMinutes = Math.max(1, m.diff(graceThreshold, "minutes"));
+    // minutesFromShiftStart measures total elapsed minutes since the scheduled start time
+    const minutesFromShiftStart = Math.max(1, m.diff(scheduledStart, "minutes"));
+    return {
+      isLate: true,
+      lateMinutes,
+      minutesFromShiftStart,
+      graceMinutes,
+      scheduledStartTime: scheduledStart.format("hh:mm A"),
+      graceThresholdTime: graceThreshold.format("hh:mm A"),
+    };
   }
 
-  return { isLate: false, lateMinutes: 0, scheduledStartTime: scheduledStart.format("hh:mm A") };
+  return {
+    isLate: false,
+    lateMinutes: 0,
+    minutesFromShiftStart: Math.max(0, m.diff(scheduledStart, "minutes")),
+    graceMinutes,
+    scheduledStartTime: scheduledStart.format("hh:mm A"),
+    graceThresholdTime: graceThreshold.format("hh:mm A"),
+  };
 };
 
 /**
@@ -116,28 +148,27 @@ export const calculateMonthWorkingDaysAndTarget = async (
   const endOfMonth = m.clone().endOf("month");
   const daysInMonth = m.daysInMonth();
 
-  const [weekOffConfig, holidays] = await Promise.all([
+  const [weekOffConfig, holidays, overrides] = await Promise.all([
     Config.findOne({ key: "weekOffDays" }).lean(),
     Holiday.find({
       date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
     }).lean(),
+    CalendarOverride.find({
+      $or: [
+        { date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+        { swapDate: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+      ],
+    }).lean(),
   ]);
 
-  const holidayDateStrings = new Set(
-    (holidays || []).map((h) => moment(h.date).tz(TZ).format("YYYY-MM-DD")),
-  );
+  const { companyWorkingDays } = resolveMonthSchedule(m, {
+    overrides,
+    holidays,
+    weekOffConfig: weekOffConfig?.value,
+    timezone: TZ,
+  });
 
-  let workingDaysCount = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dayMoment = m.clone().date(d);
-    const dateStr = dayMoment.format("YYYY-MM-DD");
-    const isHoliday = holidayDateStrings.has(dateStr);
-    const isWeekOff = isWeekOffDate(dayMoment.toDate(), weekOffConfig?.value, TZ);
-
-    if (!isHoliday && !isWeekOff) {
-      workingDaysCount++;
-    }
-  }
+  const workingDaysCount = companyWorkingDays;
 
   const companyDailyHours = Number(shiftConfig?.shiftHours) || 9;
   const dailyHours =

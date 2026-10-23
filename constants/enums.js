@@ -47,6 +47,12 @@ export const CandidateFilterStatus = Object.freeze({
   REVOKED: "REVOKED",
 });
 
+export const CalendarOverrideType = Object.freeze({
+  HOLIDAY: "HOLIDAY",
+  WORKING_DAY: "WORKING_DAY",
+  SWAP: "SWAP",
+});
+
 export const LeaveType = Object.freeze({
   PAID: "PAID",
   UNPAID: "UNPAID",
@@ -57,6 +63,7 @@ export const LeaveStatus = Object.freeze({
   PENDING: "PENDING",
   APPROVED: "APPROVED",
   REJECTED: "REJECTED",
+  REVERTED: "REVERTED",
 });
 
 export const CompOffRequestStatus = Object.freeze({
@@ -145,6 +152,7 @@ export default {
   MaritalStatus,
   InviteFilterStatus,
   CandidateFilterStatus,
+  CalendarOverrideType,
   LeaveType,
   LeaveStatus,
   CompOffRequestStatus,

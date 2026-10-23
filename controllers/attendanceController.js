@@ -171,13 +171,10 @@ export const clockInOut = async (req, res) => {
       (existing.status === AttendanceStatus.HOLIDAY || existing.status === AttendanceStatus.WEEK_OFF) &&
       !existing.checkIn
     ) {
-      const originalStatus = existing.status;
+      const compoffLabel = await getCompOffLabelForDate(todayStart);
       existing.checkIn = now;
       existing.status = AttendanceStatus.PRESENT;
-      existing.compoffFor =
-        originalStatus === AttendanceStatus.HOLIDAY
-          ? CompOffType.HOLIDAY
-          : CompOffType.WEEK_OFF;
+      existing.compoffFor = compoffLabel;
       await existing.save();
 
       await sendCheckOutEvent(existing);
