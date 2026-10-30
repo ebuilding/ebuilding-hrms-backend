@@ -2,7 +2,8 @@ import moment from "moment-timezone";
 import CalendarOverride from "../models/CalendarOverride.js";
 import Holiday from "../models/Holiday.js";
 import Config from "../models/Config.js";
-import { CalendarOverrideType } from "../constants/enums.js";
+import Attendance from "../models/Attendance.js";
+import { CalendarOverrideType, AttendanceStatus } from "../constants/enums.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import { revertLeavesForOverrideDate } from "../utils/leaveReversal.js";
 import { sendCalendarOverrideNotifications } from "../utils/calendarOverrideEmail.js";
@@ -177,6 +178,65 @@ export const createCalendarOverride = async (req, res) => {
     let affectedLeaves = [];
     if (type === CalendarOverrideType.HOLIDAY || type === CalendarOverrideType.SWAP) {
       affectedLeaves = await revertLeavesForOverrideDate(normalizedDate, title);
+    }
+
+    // Synchronize existing unpunched Attendance records for the overridden dates
+    const startOfTarget = moment(normalizedDate).tz(TIMEZONE).startOf("day").toDate();
+    const endOfTarget = moment(normalizedDate).tz(TIMEZONE).endOf("day").toDate();
+
+    if (type === CalendarOverrideType.HOLIDAY || type === CalendarOverrideType.SWAP) {
+      // Off day: update unpunched NOT_MARKED/PENDING to HOLIDAY so employees aren't marked absent
+      await Attendance.updateMany(
+        {
+          date: { $gte: startOfTarget, $lte: endOfTarget },
+          checkIn: null,
+          status: { $in: ["NOT_MARKED", "PENDING"] },
+        },
+        {
+          $set: {
+            status: AttendanceStatus.HOLIDAY,
+            notes: `${title.trim()} (${type === CalendarOverrideType.SWAP ? "Swap Off" : "Holiday"})`,
+          },
+        },
+      );
+    } else if (type === CalendarOverrideType.WORKING_DAY) {
+      // Mandatory working day: if in the past and unpunched, mark NOT_MARKED
+      if (moment(normalizedDate).tz(TIMEZONE).isBefore(moment().tz(TIMEZONE), "day")) {
+        await Attendance.updateMany(
+          {
+            date: { $gte: startOfTarget, $lte: endOfTarget },
+            checkIn: null,
+            status: { $in: ["WEEK_OFF", "HOLIDAY"] },
+          },
+          {
+            $set: {
+              status: AttendanceStatus.NOT_MARKED,
+              notes: `${title.trim()} (Mandatory Working Day)`,
+            },
+          },
+        );
+      }
+    }
+
+    if (type === CalendarOverrideType.SWAP && normalizedSwapDate) {
+      const startOfSwap = moment(normalizedSwapDate).tz(TIMEZONE).startOf("day").toDate();
+      const endOfSwap = moment(normalizedSwapDate).tz(TIMEZONE).endOf("day").toDate();
+      // Compensatory working shift: if in the past and unpunched, update from WEEK_OFF/HOLIDAY to NOT_MARKED
+      if (moment(normalizedSwapDate).tz(TIMEZONE).isBefore(moment().tz(TIMEZONE), "day")) {
+        await Attendance.updateMany(
+          {
+            date: { $gte: startOfSwap, $lte: endOfSwap },
+            checkIn: null,
+            status: { $in: ["WEEK_OFF", "HOLIDAY"] },
+          },
+          {
+            $set: {
+              status: AttendanceStatus.NOT_MARKED,
+              notes: `${title.trim()} (Compensatory Working Shift)`,
+            },
+          },
+        );
+      }
     }
 
     // Create the override document

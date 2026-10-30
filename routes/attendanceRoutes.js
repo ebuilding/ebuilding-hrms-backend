@@ -4,6 +4,7 @@ import {
   clockInOut,
   getAttendance,
   adminClockInOut,
+  deleteAdminAttendance,
   getAdminTodayAttendance,
   getAttendanceStats,
   getTodayAttendance,
@@ -38,6 +39,12 @@ attendanceRouter.post(
   protect,
   protectAdmin,
   adminClockInOut,
+);
+attendanceRouter.delete(
+  "/admin/:employeeId",
+  protect,
+  protectAdmin,
+  deleteAdminAttendance,
 );
 
 attendanceRouter.get("/stats/trend", protect, getAttendanceStats);
