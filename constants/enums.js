@@ -64,6 +64,7 @@ export const LeaveStatus = Object.freeze({
   APPROVED: "APPROVED",
   REJECTED: "REJECTED",
   REVERTED: "REVERTED",
+  REVOKE_REQUESTED: "REVOKE_REQUESTED",
 });
 
 export const CompOffRequestStatus = Object.freeze({

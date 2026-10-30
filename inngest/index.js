@@ -1,10 +1,15 @@
 import moment from "moment-timezone";
 import { Inngest } from "inngest";
+import connectDB from "../config/db.js";
 import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
+import Holiday from "../models/Holiday.js";
+import CalendarOverride from "../models/CalendarOverride.js";
+import Config from "../models/Config.js";
 import sendEmail from "../config/nodemailer.js";
 import { AttendanceStatus } from "../constants/enums.js";
+import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import {
   getAttendanceShiftConfig,
   determineAttendanceDayType,
@@ -123,7 +128,13 @@ const getEmailTemplate = (content, title = "E Building HRMS Notification") => `
 const autoCheckOut = inngest.createFunction(
   { id: "auto-check-out", triggers: [{ event: "employee/check-out" }] },
   async ({ event, step }) => {
-    const { employeeId, attendanceId } = event.data;
+    await connectDB();
+    const { employeeId, attendanceId } = event.data || {};
+
+    if (!attendanceId) {
+      console.warn("[auto-check-out] Missing attendanceId in event data");
+      return;
+    }
 
     // Wait for 13 hours
     await step.sleepUntil(
@@ -131,24 +142,43 @@ const autoCheckOut = inngest.createFunction(
       moment().add(13, "hours").toDate(),
     );
 
+    await connectDB();
+
     // get Attendance data
     let attendance = await Attendance.findById(attendanceId);
 
-    if (!attendance?.checkOut) {
-      // get Employee data (Populate department)
-      const employee =
-        await Employee.findById(employeeId).populate("department");
+    // If attendance record no longer exists or employee already checked out, stop
+    if (!attendance || attendance.checkOut) {
+      return;
+    }
 
-      const checkInTime = moment(attendance?.checkIn).tz(TZ).format("hh:mm A");
-      const deptName = employee.department?.name || "your department";
+    // Extract employee ID cleanly (whether string, ObjectId, or object)
+    const empId =
+      (typeof employeeId === "object" ? employeeId?._id?.toString() : employeeId?.toString()) ||
+      attendance.employeeId?.toString();
 
-      // Send reminder email
-      await step.run("send-reminder-email", async () => {
-        await sendEmail({
-          to: employee.email,
-          subject: "Attendance Check-Out Reminder",
-          body: getEmailTemplate(
-            `
+    if (!empId) {
+      console.warn(`[auto-check-out] No valid employeeId found for attendance ${attendanceId}`);
+      return;
+    }
+
+    const employee = await Employee.findById(empId).populate("department");
+    if (!employee) {
+      console.warn(`[auto-check-out] Employee not found for id: ${empId}`);
+      return;
+    }
+
+    const checkInTime = moment(attendance.checkIn).tz(TZ).format("hh:mm A");
+    const deptName = employee.department?.name || "your department";
+
+    // Send reminder email
+    await step.run("send-reminder-email", async () => {
+      if (!employee.email) return;
+      await sendEmail({
+        to: employee.email,
+        subject: "Attendance Check-Out Reminder",
+        body: getEmailTemplate(
+          `
 <h2 style="
   margin:0 0 18px;
   font-size:24px;
@@ -218,46 +248,49 @@ const autoCheckOut = inngest.createFunction(
   If you already left the office, please contact your administrator.
 </p>
         `,
-            "Action Required: Check-Out Reminder",
-          ),
-        });
+          "Action Required: Check-Out Reminder",
+        ),
       });
+    });
 
-      // After 14 hours, mark attendance as checked out and keep status as present
-      await step.sleepUntil(
-        "wait-for-the-1-hour",
-        moment().add(1, "hours").toDate(),
-      );
+    // After 14 hours total (1 more hour), mark attendance as checked out and keep status as present
+    await step.sleepUntil(
+      "wait-for-the-1-hour",
+      moment().add(1, "hours").toDate(),
+    );
 
-      attendance = await Attendance.findById(attendanceId);
-      if (!attendance?.checkOut) {
-        const shiftConfig = await getAttendanceShiftConfig();
-        const checkInMoment = moment(attendance.checkIn).tz(TZ);
-        let checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
+    await connectDB();
 
-        // If check-in occurred at or after shift end time, set checkout to next day
-        if (checkOutMoment.isSameOrBefore(checkInMoment)) {
-          checkOutMoment.add(1, "day");
-        }
-
-        attendance.checkOut = checkOutMoment.toDate();
-        const duration = Math.max(
-          0,
-          (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60),
-        );
-        attendance.workingHours = parseFloat(duration.toFixed(2));
-        const { dayType } = determineAttendanceDayType(
-          attendance.workingHours,
-          shiftConfig,
-        );
-        attendance.dayType = dayType;
-        attendance.status = AttendanceStatus.PRESENT;
-        attendance.updatedBy = "System";
-        attendance.adminUpdatedAt = new Date();
-        await attendance.save();
-        // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
-      }
+    attendance = await Attendance.findById(attendanceId);
+    if (!attendance || attendance.checkOut) {
+      return;
     }
+
+    const shiftConfig = await getAttendanceShiftConfig();
+    const checkInMoment = moment(attendance.checkIn).tz(TZ);
+    let checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
+
+    // If check-in occurred at or after shift end time, set checkout to next day
+    if (checkOutMoment.isSameOrBefore(checkInMoment)) {
+      checkOutMoment.add(1, "day");
+    }
+
+    attendance.checkOut = checkOutMoment.toDate();
+    const duration = Math.max(
+      0,
+      (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60),
+    );
+    attendance.workingHours = parseFloat(duration.toFixed(2));
+    const { dayType } = determineAttendanceDayType(
+      attendance.workingHours,
+      shiftConfig,
+    );
+    attendance.dayType = dayType;
+    attendance.status = AttendanceStatus.PRESENT;
+    attendance.updatedBy = "System";
+    attendance.adminUpdatedAt = new Date();
+    await attendance.save();
+    // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
   },
 );
 
@@ -273,6 +306,8 @@ const leaveApplicationReminder = inngest.createFunction(
       moment().add(24, "hours").toDate(),
     );
 
+    await connectDB();
+
     const leaveApplication =
       await LeaveApplication.findById(leaveApplicationId);
 
@@ -280,6 +315,12 @@ const leaveApplicationReminder = inngest.createFunction(
       const employee = await Employee.findById(
         leaveApplication.employeeId,
       ).populate("department");
+
+      if (!employee) {
+        console.warn(`[leave-application-reminder] Employee not found for leave ${leaveApplicationId}`);
+        return;
+      }
+
       const startDate = moment(leaveApplication?.startDate).format(
         "MMM DD, YYYY",
       );
@@ -407,76 +448,231 @@ style="
   },
 );
 
-// Cron: Check attendance at 10:00 AM IST and email absent employees
+// Dynamic Shift Attendance Cron: Morning dispatcher at 6:00 AM IST daily
+// 1. Checks if today is an official working day (skips holidays, Sundays, swapped off days)
+// 2. Loads dynamic shift startTime configured in Settings (e.g. 10:00 AM)
+// 3. Sleeps until (shiftStartTime - 15 minutes) and sends 15-minute early reminder to unpunched employees
+// 4. Sleeps until shiftStartTime and sends missing attendance reminder to employees still absent
 const attendanceReminderCron = inngest.createFunction(
   {
     id: "attendance-reminder-cron",
-    triggers: [{ cron: "TZ=Asia/Kolkata 0 10 * * *" }],
+    triggers: [{ cron: "TZ=Asia/Kolkata 0 6 * * *" }],
   },
   async ({ step }) => {
-    // Step 1: Get today's date range (IST)
-    const todayRange = await step.run("get-today-date", () => {
-      const start = moment.tz(TZ).startOf("day");
-      const end = start.clone().endOf("day");
-      return { startUTC: start.toISOString(), endUTC: end.toISOString() };
+    // Step 1: Check if today is a scheduled working day
+    const isWorkingDay = await step.run("check-working-day", async () => {
+      await connectDB();
+      const todayStart = moment.tz(TZ).startOf("day").toDate();
+      const todayEnd = moment.tz(TZ).endOf("day").toDate();
+
+      const [holidays, overrides, weekOffConfigDoc] = await Promise.all([
+        Holiday.find({ date: { $gte: todayStart, $lte: todayEnd } }).lean(),
+        CalendarOverride.find({
+          $or: [
+            { date: { $gte: todayStart, $lte: todayEnd } },
+            { swapDate: { $gte: todayStart, $lte: todayEnd } },
+          ],
+        }).lean(),
+        Config.findOne({ key: "weekOffDays" }).lean(),
+      ]);
+
+      const schedule = getCalendarDaySchedule(todayStart, {
+        overrides,
+        holidays,
+        weekOffConfig: weekOffConfigDoc?.value,
+        timezone: TZ,
+      });
+
+      return schedule.isWorkingDay;
     });
 
-    // Step 2: Get all active, non-deleted employees (Populate department)
-    const activeEmployees = await step.run("get-active-employees", async () => {
-      const employees = await Employee.find({
-        isDeleted: false,
-        employmentStatus: "ACTIVE",
-      })
-        .populate("department")
-        .lean();
-      return employees.map((e) => ({
-        _id: e._id.toString(),
-        firstName: e.firstName,
-        lastName: e.lastName,
-        email: e.email,
-        departmentName: e.department?.name || "General",
-      }));
+    if (!isWorkingDay) {
+      return { skipped: true, reason: "Today is an official holiday or weekly off" };
+    }
+
+    // Step 2: Load dynamic shift configuration
+    const shiftTiming = await step.run("get-shift-timing", async () => {
+      await connectDB();
+      const shiftConfig = await getAttendanceShiftConfig();
+      const todayYMD = moment.tz(TZ).format("YYYY-MM-DD");
+
+      let startMoment = moment.tz(`${todayYMD} ${shiftConfig.startTime}`, "YYYY-MM-DD hh:mm A", TZ);
+      if (!startMoment.isValid()) {
+        startMoment = moment.tz(`${todayYMD} ${shiftConfig.startTime}`, "YYYY-MM-DD HH:mm", TZ);
+      }
+      if (!startMoment.isValid()) {
+        startMoment = moment.tz(`${todayYMD} 10:00 AM`, "YYYY-MM-DD hh:mm A", TZ);
+      }
+
+      const earlyReminderMoment = startMoment.clone().subtract(15, "minutes");
+
+      return {
+        startTimeStr: shiftConfig.startTime || "10:00 AM",
+        shiftStartISO: startMoment.toISOString(),
+        earlyReminderISO: earlyReminderMoment.toISOString(),
+      };
     });
 
-    // Step 3: Get employee IDs on approved leave today
-    const onLeaveIds = await step.run("get-on-leave-ids", async () => {
-      const leaves = await LeaveApplication.find({
-        status: "APPROVED",
-        startDate: { $lte: new Date(todayRange.endUTC) },
-        endDate: { $gte: new Date(todayRange.startUTC) },
-      }).lean();
-      return leaves.map((l) => l.employeeId.toString());
-    });
+    // Step 3: Wait for early reminder time (shiftStartTime - 15 minutes)
+    const earlyMoment = moment(shiftTiming.earlyReminderISO);
+    if (earlyMoment.isAfter(moment())) {
+      await step.sleepUntil("wait-for-early-reminder", earlyMoment.toDate());
+    }
 
-    // Step 4: Get employee IDs who already checked in today
-    const checkedInIds = await step.run("get-checked-in-ids", async () => {
-      const attendances = await Attendance.find({
-        date: {
-          $gte: new Date(todayRange.startUTC),
-          $lt: new Date(todayRange.endUTC),
-        },
-      }).lean();
-      return attendances.map((a) => a.employeeId.toString());
-    });
+    // Send 15-minute early reminder if we haven't already passed shift start
+    if (moment().isBefore(moment(shiftTiming.shiftStartISO))) {
+      await step.run("send-early-reminders", async () => {
+        await connectDB();
+        const todayStart = moment.tz(TZ).startOf("day").toDate();
+        const todayEnd = moment.tz(TZ).endOf("day").toDate();
 
-    // Step 5: Filter absent employees (not on leave & not checked in)
-    const absentEmployees = activeEmployees.filter(
-      (emp) => !onLeaveIds.includes(emp._id) && !checkedInIds.includes(emp._id),
-    );
+        const [activeEmployees, leaves, attendances] = await Promise.all([
+          Employee.find({ isDeleted: false, employmentStatus: "ACTIVE" }).populate("department").lean(),
+          LeaveApplication.find({
+            status: "APPROVED",
+            startDate: { $lte: todayEnd },
+            endDate: { $gte: todayStart },
+          }).lean(),
+          Attendance.find({
+            date: { $gte: todayStart, $lt: todayEnd },
+          }).lean(),
+        ]);
 
-    // Step 6: Send reminder emails
-    if (absentEmployees.length > 0) {
-      await step.run("send-reminder-emails", async () => {
+        const onLeaveIds = new Set(leaves.map((l) => l.employeeId.toString()));
+        const checkedInIds = new Set(attendances.map((a) => a.employeeId.toString()));
+
+        const pendingEmployees = activeEmployees.filter(
+          (emp) => !onLeaveIds.has(emp._id.toString()) && !checkedInIds.has(emp._id.toString()),
+        );
+
+        if (pendingEmployees.length === 0) return { count: 0 };
+
         const todayStr = moment().tz(TZ).format("MMMM DD, YYYY");
         const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-        const shiftConfig = await getAttendanceShiftConfig();
-        const deadlineStr = shiftConfig?.startTime || "10:00 AM";
-        const emailPromises = absentEmployees.map((emp) => {
+        const startTimeStr = shiftTiming.startTimeStr;
+
+        const emailPromises = pendingEmployees.map((emp) => {
+          if (!emp.email) return Promise.resolve();
           return sendEmail({
             to: emp.email,
-            subject: `Attendance Missing for ${todayStr}`,
+            subject: `Reminder: Shift Starts in 15 Minutes (${startTimeStr})`,
             body: getEmailTemplate(
               `
+<h2 style="
+  margin:0 0 16px;
+  font-size:22px;
+  color:#111827;
+  font-weight:700;
+">
+  Good Morning, ${emp.firstName} 👋
+</h2>
+
+<p style="
+  margin:0 0 18px;
+  color:#4b5563;
+  font-size:15px;
+  line-height:1.8;
+">
+  This is a gentle reminder that your scheduled shift begins in <strong>15 minutes at ${startTimeStr} IST</strong> today (<strong>${todayStr}</strong>).
+</p>
+
+<div style="
+  background:#f0fdf4;
+  border:1px solid #bbf7d0;
+  color:#166534;
+  padding:18px;
+  border-radius:14px;
+  margin:22px 0;
+">
+  <div style="font-size:14px; font-weight:700; margin-bottom:4px;">
+    Shift Start Time: ${startTimeStr} IST
+  </div>
+  <div style="font-size:13px; line-height:1.6;">
+    Please remember to mark your attendance using the dashboard or attendance page on time.
+  </div>
+</div>
+
+<div style="
+  background:#f8fafc;
+  border:1px solid #e2e8f0;
+  border-radius:14px;
+  padding:14px 18px;
+  margin:20px 0;
+">
+  <div style="font-size:12px; color:#64748b; margin-bottom:4px;">DEPARTMENT</div>
+  <div style="font-size:14px; font-weight:600; color:#111827;">${emp.department?.name || "General"}</div>
+</div>
+
+<a href="${frontendUrl}/attendance"
+style="
+  display:inline-block;
+  background:#811c50;
+  color:#ffffff;
+  text-decoration:none;
+  padding:14px 22px;
+  border-radius:12px;
+  font-size:14px;
+  font-weight:600;
+">
+  Clock In Now
+</a>
+              `,
+              "Shift Early Reminder",
+            ),
+          });
+        });
+
+        await Promise.all(emailPromises);
+        return { count: pendingEmployees.length };
+      });
+    }
+
+    // Step 4: Wait for shift start deadline
+    const shiftStart = moment(shiftTiming.shiftStartISO);
+    if (shiftStart.isAfter(moment())) {
+      await step.sleepUntil("wait-for-shift-deadline", shiftStart.toDate());
+    }
+
+    // Send missing attendance reminder to employees still absent at shift start time
+    const result = await step.run("send-deadline-reminders", async () => {
+      await connectDB();
+      const todayStart = moment.tz(TZ).startOf("day").toDate();
+      const todayEnd = moment.tz(TZ).endOf("day").toDate();
+
+      const [activeEmployees, leaves, attendances] = await Promise.all([
+        Employee.find({ isDeleted: false, employmentStatus: "ACTIVE" }).populate("department").lean(),
+        LeaveApplication.find({
+          status: "APPROVED",
+          startDate: { $lte: todayEnd },
+          endDate: { $gte: todayStart },
+        }).lean(),
+        Attendance.find({
+          date: { $gte: todayStart, $lt: todayEnd },
+        }).lean(),
+      ]);
+
+      const onLeaveIds = new Set(leaves.map((l) => l.employeeId.toString()));
+      const checkedInIds = new Set(attendances.map((a) => a.employeeId.toString()));
+
+      const absentEmployees = activeEmployees.filter(
+        (emp) => !onLeaveIds.has(emp._id.toString()) && !checkedInIds.has(emp._id.toString()),
+      );
+
+      if (absentEmployees.length === 0) {
+        return { absentCount: 0, emailsSent: 0 };
+      }
+
+      const todayStr = moment().tz(TZ).format("MMMM DD, YYYY");
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      const deadlineStr = shiftTiming.startTimeStr;
+
+      const emailPromises = absentEmployees.map((emp) => {
+        if (!emp.email) return Promise.resolve();
+        return sendEmail({
+          to: emp.email,
+          subject: `Attendance Missing for ${todayStr}`,
+          body: getEmailTemplate(
+            `
 <h2 style="
   margin:0 0 18px;
   font-size:24px;
@@ -544,7 +740,7 @@ const attendanceReminderCron = inngest.createFunction(
     font-weight:600;
     color:#111827;
   ">
-    ${emp.departmentName}
+    ${emp.department?.name || "General"}
   </div>
 
 </div>
@@ -562,22 +758,17 @@ style="
 ">
   Mark Attendance
 </a>
-            `,
-              "Attendance Reminder",
-            ),
-          });
+          `,
+            "Attendance Reminder",
+          ),
         });
-        await Promise.all(emailPromises);
-        return { emailsSent: absentEmployees.length };
       });
-    }
 
-    return {
-      totalActive: activeEmployees.length,
-      onLeave: onLeaveIds.length,
-      checkedIn: checkedInIds.length,
-      absent: absentEmployees.length,
-    };
+      await Promise.all(emailPromises);
+      return { absentCount: absentEmployees.length, emailsSent: absentEmployees.length };
+    });
+
+    return result;
   },
 );
 

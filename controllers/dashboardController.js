@@ -31,6 +31,7 @@ export const getDashboard = async (req, res) => {
         allActiveEmployees,
         todayApprovedLeaves,
         pendingLeavesCount,
+        pendingRevocationsCount,
         totalDepartments,
         departmentStats,
         leaveStats,
@@ -50,6 +51,7 @@ export const getDashboard = async (req, res) => {
           endDate: { $gte: todayStart },
         }).lean(),
         LeaveApplication.countDocuments({ status: "PENDING" }),
+        LeaveApplication.countDocuments({ status: "REVOKE_REQUESTED" }),
         Department.countDocuments(),
         // Department Distribution
         Employee.aggregate([
@@ -82,11 +84,13 @@ export const getDashboard = async (req, res) => {
           },
           { $group: { _id: "$type", count: { $sum: 1 } } },
         ]),
-        // Recent Leave Applications
-        LeaveApplication.find({ status: "PENDING" })
+        // Recent Leave Applications & Revocation Requests
+        LeaveApplication.find({
+          status: { $in: ["PENDING", "REVOKE_REQUESTED"] },
+        })
           .populate("employeeId", "firstName lastName")
-          .sort({ createdAt: -1 })
-          .limit(5)
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .limit(8)
           .lean(),
         // Celebrations (Birthdays & Anniversaries)
         getCelebrationsData(30),
@@ -145,7 +149,26 @@ export const getDashboard = async (req, res) => {
         .map((rec) => {
           const mIn = moment(rec.checkIn).tz(TZ);
           const mOut = rec.checkOut ? moment(rec.checkOut).tz(TZ) : null;
+          const isClockedOut = Boolean(rec.checkOut);
           const lateInfo = calculateLateArrival(rec.checkIn, shiftConfig);
+
+          let workingHours = rec.workingHours;
+          if (workingHours == null) {
+            if (rec.checkOut) {
+              const diffMs = new Date(rec.checkOut) - new Date(rec.checkIn);
+              workingHours = Math.max(0, diffMs / (1000 * 60 * 60));
+            } else {
+              const nowMs = moment().tz(TZ).toDate().getTime();
+              const checkInMs = new Date(rec.checkIn).getTime();
+              workingHours = Math.max(0, (nowMs - checkInMs) / (1000 * 60 * 60));
+            }
+          }
+
+          const totalMinutes = Math.round((workingHours || 0) * 60);
+          const hoursPart = Math.floor(totalMinutes / 60);
+          const minsPart = totalMinutes % 60;
+          const durationFormatted = `${hoursPart}h ${minsPart}m`;
+
           return {
             id: rec._id,
             employeeId: rec.employeeId._id,
@@ -155,6 +178,9 @@ export const getDashboard = async (req, res) => {
             profile_img: rec.employeeId.profile_img || "",
             checkInTime: mIn.format("hh:mm A"),
             checkOutTime: mOut ? mOut.format("hh:mm A") : null,
+            isClockedOut,
+            workingHours: Number((workingHours || 0).toFixed(1)),
+            durationFormatted,
             isLate: lateInfo.isLate,
             lateMinutes: lateInfo.lateMinutes,
             minutesFromShiftStart: lateInfo.minutesFromShiftStart,
@@ -164,6 +190,9 @@ export const getDashboard = async (req, res) => {
             status: rec.status,
           };
         });
+
+      const currentlyWorkingCount = punchedInList.filter((item) => !item.isClockedOut).length;
+      const clockedOutCount = punchedInList.filter((item) => item.isClockedOut).length;
 
       // List of employees who have NOT punched in today
       const notPunchedInList = allActiveEmployees
@@ -305,7 +334,9 @@ export const getDashboard = async (req, res) => {
         totalEmployees,
         totalDepartments: totalDepartments,
         todayAttendance: todayAttendanceCount,
-        pendingLeaves: pendingLeavesCount,
+        pendingLeaves: pendingLeavesCount + pendingRevocationsCount,
+        pendingApplicationsCount: pendingLeavesCount,
+        pendingRevocationsCount,
         charts: {
           departmentStats: departmentStats.map((d) => ({
             name: d.name,
@@ -325,11 +356,16 @@ export const getDashboard = async (req, res) => {
           startDate: l.startDate,
           endDate: l.endDate,
           status: l.status,
+          revokeReason: l.revokeReason,
+          reason: l.reason,
+          isHalfDay: l.isHalfDay,
         })),
         celebrations: celebrations || { today: [], upcoming: [] },
         attendanceWatchlist: {
           totalEmployees,
           punchedInCount: punchedInList.length,
+          currentlyWorkingCount,
+          clockedOutCount,
           notPunchedInCount: notPunchedInList.length,
           onLeaveCount,
           punchedInList,
@@ -389,7 +425,7 @@ export const getDashboard = async (req, res) => {
         }).lean(),
         LeaveApplication.countDocuments({
           employeeId: employee._id,
-          status: "PENDING",
+          status: { $in: ["PENDING", "REVOKE_REQUESTED"] },
         }),
         Payslip.findOne({ employeeId: employee._id })
           .sort({ createdAt: -1 })

@@ -3,6 +3,9 @@ import { inngest } from "../inngest/index.js";
 import Attendance from "../models/Attendance.js";
 import Employee from "../models/Employee.js";
 import Config from "../models/Config.js";
+import Holiday from "../models/Holiday.js";
+import CalendarOverride from "../models/CalendarOverride.js";
+import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import { getCompOffLabelForDate } from "../utils/compOff.js";
 import ExcelJS from "exceljs";
 import {
@@ -25,11 +28,16 @@ const getTodayDate = () => {
 
 const sendCheckOutEvent = async (attendance) => {
   try {
+    const empId =
+      attendance.employeeId?._id?.toString() ||
+      attendance.employeeId?.toString();
+    const attId = attendance._id?.toString();
+
     await inngest.send({
       name: "employee/check-out",
       data: {
-        employeeId: attendance.employeeId,
-        attendanceId: attendance._id,
+        employeeId: empId,
+        attendanceId: attId,
       },
     });
   } catch (error) {
@@ -226,7 +234,14 @@ export const getAttendance = async (req, res) => {
     const todayStart = moment.tz(TZ).startOf("day").toDate();
     const todayEnd = moment.tz(TZ).endOf("day").toDate();
 
-    const [shiftConfig, results, todayRecord] = await Promise.all([
+    const [
+      shiftConfig,
+      results,
+      todayRecord,
+      holidays,
+      overrides,
+      weekOffConfigDoc,
+    ] = await Promise.all([
       getAttendanceShiftConfig(),
       Attendance.aggregate([
         {
@@ -293,6 +308,16 @@ export const getAttendance = async (req, res) => {
         employeeId: employee._id,
         date: { $gte: todayStart, $lte: todayEnd },
       }).lean(),
+      Holiday.find({
+        date: { $gte: startOfMonth, $lte: endOfMonth },
+      }).lean(),
+      CalendarOverride.find({
+        $or: [
+          { date: { $gte: startOfMonth, $lte: endOfMonth } },
+          { swapDate: { $gte: startOfMonth, $lte: endOfMonth } },
+        ],
+      }).lean(),
+      Config.findOne({ key: "weekOffDays" }).lean(),
     ]);
 
     const history = results[0].history;
@@ -306,6 +331,46 @@ export const getAttendance = async (req, res) => {
       totalHours: 0,
     };
 
+    // Build calendarDays map for every day in the month using the schedule resolver
+    const weekOffConfig = weekOffConfigDoc?.value || { weeklyDays: ["Sunday"] };
+    const daysInMonth = moment(startOfMonth).tz(TZ).daysInMonth();
+    const calendarDays = {};
+    let scheduledHolidays = 0;
+    let scheduledWeekOffs = 0;
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dayMoment = moment(startOfMonth).tz(TZ).date(d);
+      const schedule = getCalendarDaySchedule(dayMoment, {
+        overrides,
+        holidays,
+        weekOffConfig,
+        timezone: TZ,
+      });
+
+      calendarDays[schedule.dateKey] = {
+        dateKey: schedule.dateKey,
+        dayName: schedule.dayName,
+        isWorkingDay: schedule.isWorkingDay,
+        isHoliday: schedule.isHoliday,
+        isWeekOff: schedule.isWeekOff,
+        isSwapOff: Boolean(schedule.isSwapOff),
+        isOverride: Boolean(schedule.isOverride),
+        overrideType: schedule.overrideType || null,
+        label: schedule.label || (schedule.isHoliday ? "Holiday" : schedule.isWeekOff ? "Week Off" : "Working Day"),
+        reason: schedule.reason || "",
+      };
+
+      if (schedule.isHoliday) scheduledHolidays++;
+      if (schedule.isWeekOff) scheduledWeekOffs++;
+    }
+
+    if ((stats.weekOff || 0) === 0) {
+      stats.weekOff = scheduledWeekOffs;
+    }
+    if ((stats.holiday || 0) === 0) {
+      stats.holiday = scheduledHolidays;
+    }
+
     // Ensure totalHours is rounded
     stats.totalHours = parseFloat((stats.totalHours || 0).toFixed(2));
 
@@ -315,6 +380,7 @@ export const getAttendance = async (req, res) => {
       todayRecord,
       stats,
       shiftConfig,
+      calendarDays,
       employee: { isDeleted: employee.isDeleted },
     });
   } catch (error) {
@@ -327,7 +393,7 @@ export const getAttendance = async (req, res) => {
 export const adminClockInOut = async (req, res) => {
   try {
     const { employeeId } = req.params;
-    const { date, checkIn, checkOut, status, dayType, compoffFor } = req.body;
+    const { date, checkIn, checkOut, status, dayType, compoffFor, removeCheckOut, deleteRecord } = req.body;
 
     const baseDate = parseLocalDate(date);
     if (!baseDate) return res.status(400).json({ error: "Invalid date" });
@@ -340,10 +406,22 @@ export const adminClockInOut = async (req, res) => {
       date: { $gte: todayStart, $lte: todayEnd },
     });
 
+    // If admin requested full deletion of this day's attendance
+    if (deleteRecord) {
+      if (attendance) {
+        await Attendance.findByIdAndDelete(attendance._id);
+      }
+      return res.json({ success: true, message: "Attendance record removed successfully" });
+    }
+
     const checkInTime = parseLocalTime(checkIn, baseDate);
-    const checkOutTime = parseLocalTime(checkOut, baseDate);
+    // If removeCheckOut is explicitly requested or checkOut is null/empty while checkIn exists
+    const checkOutTime = removeCheckOut ? null : parseLocalTime(checkOut, baseDate);
 
     if (!attendance) {
+      if (!checkInTime && !checkOutTime) {
+        return res.json({ success: true, message: "No attendance to record", data: null });
+      }
       attendance = new Attendance({
         employeeId,
         date: todayStart,
@@ -352,39 +430,72 @@ export const adminClockInOut = async (req, res) => {
 
     attendance.checkIn = checkInTime;
     attendance.checkOut = checkOutTime;
-    attendance.status = status || AttendanceStatus.PRESENT;
     attendance.compoffFor = compoffFor || "";
-    attendance.updatedBy = req.session.email;
+    attendance.updatedBy = req.session?.email || "ADMIN";
     attendance.adminUpdatedAt = new Date();
+
     if (checkInTime && checkOutTime) {
       if (checkOutTime < checkInTime) {
         checkOutTime.setDate(checkOutTime.getDate() + 1);
         attendance.checkOut = checkOutTime;
       }
       // Note: This logic assumes shifts are less than 24 hours.
-      // If a shift works more than 24h, this single-day rollover will not accurately capture the total duration.
       const duration = Math.max(
         0,
         (checkOutTime - checkInTime) / (1000 * 60 * 60),
       );
       attendance.workingHours = parseFloat(duration.toFixed(2));
-    }
+      attendance.status = status || AttendanceStatus.PRESENT;
 
-    if (dayType) {
-      attendance.dayType = dayType;
-    } else if (attendance.workingHours !== null && attendance.workingHours !== undefined) {
-      const shiftConfig = await getAttendanceShiftConfig();
-      attendance.dayType = determineAttendanceDayType(
-        attendance.workingHours,
-        shiftConfig,
-      ).dayType;
+      if (dayType) {
+        attendance.dayType = dayType;
+      } else {
+        const shiftConfig = await getAttendanceShiftConfig();
+        attendance.dayType = determineAttendanceDayType(
+          attendance.workingHours,
+          shiftConfig,
+        ).dayType;
+      }
+    } else if (checkInTime && !checkOutTime) {
+      // Re-opened shift or open punch (employee can clock out at end of day)
+      attendance.workingHours = 0;
+      attendance.dayType = dayType || DayType.FULL_DAY;
+      attendance.status = status || AttendanceStatus.PRESENT;
+      // Re-dispatch auto checkout reminder
+      await sendCheckOutEvent(attendance);
     } else {
-      attendance.dayType = DayType.FULL_DAY;
+      // No check-in or check-out provided
+      attendance.workingHours = 0;
+      attendance.status = status || AttendanceStatus.NOT_MARKED;
+      attendance.dayType = dayType || DayType.FULL_DAY;
     }
 
     await attendance.save();
-    // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
     res.json({ success: true, data: attendance });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Admin: Delete attendance record for a specific employee and date
+// DELETE /api/attendance/admin/:employeeId
+export const deleteAdminAttendance = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { date } = req.query;
+
+    const baseDate = parseLocalDate(date);
+    if (!baseDate) return res.status(400).json({ error: "Invalid date" });
+
+    const todayStart = moment(baseDate).tz(TZ).startOf("day").toDate();
+    const todayEnd = moment(baseDate).tz(TZ).endOf("day").toDate();
+
+    await Attendance.findOneAndDelete({
+      employeeId,
+      date: { $gte: todayStart, $lte: todayEnd },
+    });
+
+    res.json({ success: true, message: "Attendance record deleted successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
