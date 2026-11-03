@@ -1,4 +1,5 @@
 import TaskSheet, { TaskCompletion, DailyFocus } from "../models/TaskSheet.js";
+import { ApprovalStatus } from "../constants/enums.js";
 
 // Helper function to assemble and return the fully populated frontend payload.
 // This keeps the API completely backward-compatible with our client React components!
@@ -9,7 +10,7 @@ const getCompiledSheet = async (userId, month) => {
       userId,
       month,
       tasks: [],
-      approvalStatus: "PENDING",
+      approvalStatus: ApprovalStatus.PENDING,
     });
   }
 
@@ -43,7 +44,7 @@ const getCompiledSheet = async (userId, month) => {
     userId: sheet.userId,
     month: sheet.month,
     tasks: sheet.tasks || [],
-    approvalStatus: sheet.approvalStatus || "PENDING",
+    approvalStatus: sheet.approvalStatus || ApprovalStatus.PENDING,
     completions: completions.map((c) => ({ taskId: c.taskId, date: c.date })),
     dailyTodos,
     eodReports,

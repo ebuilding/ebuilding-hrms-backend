@@ -15,7 +15,7 @@ import {
   reservePaidLeave,
   settlePaidLeaveApproval,
 } from "../utils/paidLeave.js";
-import { LeaveType, LeaveStatus, DayType, AttendanceStatus } from "../constants/enums.js";
+import { LeaveType, LeaveStatus, DayType, AttendanceStatus, UserRole } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -94,7 +94,7 @@ const revertLeaveAttendance = async (leave) => {
     await Attendance.deleteMany({
       employeeId: leave.employeeId,
       date: { $gte: dateStart, $lte: dateEnd },
-      status: "LEAVE",
+      status: AttendanceStatus.LEAVE,
     });
   }
 };
@@ -199,13 +199,20 @@ export const createLeave = async (req, res) => {
 export const getLeaves = async (req, res) => {
   try {
     const session = req.session;
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     const policy = await LeavePolicy.findOne({ scope: "COMPANY" }).lean();
     const hasPaidPolicy = Boolean(policy);
 
     if (isAdmin) {
-      const status = req.query.status;
+      const { status, year } = req.query;
       const where = status ? { status } : {};
+      if (year && !isNaN(parseInt(year, 10))) {
+        const y = parseInt(year, 10);
+        const startOfYear = moment.tz(`${y}-01-01`, TZ).startOf("year").toDate();
+        const endOfYear = moment.tz(`${y}-12-31`, TZ).endOf("year").toDate();
+        where.startDate = { $lte: endOfYear };
+        where.endDate = { $gte: startOfYear };
+      }
       const leaves = await LeaveApplication.find(where)
         .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt updatedAt employeeId addedBy adminUpdatedAt workingDates revertedDates revertReason revertedAt revokeReason revokeRequestedAt revokeRequestedBy")
         .populate({
@@ -237,9 +244,17 @@ export const getLeaves = async (req, res) => {
         .select("firstName lastName leaveBalance isDeleted")
         .lean();
 
-      const leaves = await LeaveApplication.find({
-        employeeId: employee._id,
-      })
+      const { year } = req.query;
+      const where = { employeeId: employee._id };
+      if (year && !isNaN(parseInt(year, 10))) {
+        const y = parseInt(year, 10);
+        const startOfYear = moment.tz(`${y}-01-01`, TZ).startOf("year").toDate();
+        const endOfYear = moment.tz(`${y}-12-31`, TZ).endOf("year").toDate();
+        where.startDate = { $lte: endOfYear };
+        where.endDate = { $gte: startOfYear };
+      }
+
+      const leaves = await LeaveApplication.find(where)
         .select("type status startDate endDate reason isHalfDay halfDayType chargedDays createdAt updatedAt addedBy adminUpdatedAt workingDates revertedDates revertReason revertedAt revokeReason revokeRequestedAt revokeRequestedBy")
         .sort({ createdAt: -1 })
         .lean();
@@ -259,7 +274,7 @@ export const getLeaves = async (req, res) => {
 export const updateLeaveStatus = async (req, res) => {
   try {
     const { status, rejectionReason } = req.body;
-    if (!["APPROVED", "REJECTED", "PENDING"].includes(status)) {
+    if (![LeaveStatus.APPROVED, LeaveStatus.REJECTED, LeaveStatus.PENDING].includes(status)) {
       return res.status(400).json({ error: "Invalid status" });
     }
 
@@ -270,10 +285,10 @@ export const updateLeaveStatus = async (req, res) => {
     if (!employee) return res.status(404).json({ error: "Employee not found" });
 
     // If status is changing to APPROVED, deduct balance
-    if (status === "APPROVED" && leave.status !== "APPROVED") {
-      if (leave.type === "PAID") {
+    if (status === LeaveStatus.APPROVED && leave.status !== LeaveStatus.APPROVED) {
+      if (leave.type === LeaveType.PAID) {
         await settlePaidLeaveApproval(leave, req.session.email);
-      } else if (leave.type === "COMP_OFF") {
+      } else if (leave.type === LeaveType.COMP_OFF) {
         if (employee.leaveBalance.compOff < leave.chargedDays) {
           return res
             .status(400)
@@ -287,8 +302,8 @@ export const updateLeaveStatus = async (req, res) => {
       await syncLeaveWithAttendance(leave, req.session.email);
     }
 
-    if (status === "REJECTED" && leave.status !== "REJECTED") {
-      if (leave.type === "PAID") {
+    if (status === LeaveStatus.REJECTED && leave.status !== LeaveStatus.REJECTED) {
+      if (leave.type === LeaveType.PAID) {
         await releasePaidLeaveReservation(leave, req.session.email);
       }
       if (rejectionReason) {
@@ -298,7 +313,7 @@ export const updateLeaveStatus = async (req, res) => {
     }
 
     // Revert synced Attendance records if leave status changes from APPROVED to something else
-    if (leave.status === "APPROVED" && status !== "APPROVED") {
+    if (leave.status === LeaveStatus.APPROVED && status !== LeaveStatus.APPROVED) {
       await revertLeaveAttendance(leave);
     }
 
@@ -312,7 +327,7 @@ export const updateLeaveStatus = async (req, res) => {
         const startStr = moment(leave.startDate).tz(TZ).format("MMM DD, YYYY");
         const endStr = moment(leave.endDate).tz(TZ).format("MMM DD, YYYY");
 
-        if (status === "APPROVED") {
+        if (status === LeaveStatus.APPROVED) {
           await sendEmail({
             to: employee.email,
             subject: `Leave Application Approved ✅`,
@@ -331,7 +346,7 @@ export const updateLeaveStatus = async (req, res) => {
               "Leave Application Approved"
             ),
           });
-        } else if (status === "REJECTED") {
+        } else if (status === LeaveStatus.REJECTED) {
           await sendEmail({
             to: employee.email,
             subject: `Leave Application Update`,
@@ -377,7 +392,7 @@ export const editPendingLeave = async (req, res) => {
       return res.status(400).json({ error: "Only pending leave applications can be edited" });
     }
 
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     const employee = await Employee.findById(leave.employeeId);
     if (!employee) return res.status(404).json({ error: "Employee not found" });
 
@@ -490,7 +505,7 @@ export const deletePendingLeave = async (req, res) => {
       return res.status(400).json({ error: "Only pending leaves can be cancelled" });
     }
 
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     const employee = await Employee.findById(leave.employeeId);
     if (!employee) return res.status(404).json({ error: "Employee not found" });
 
@@ -533,7 +548,7 @@ export const requestRevokeLeave = async (req, res) => {
     const employee = await Employee.findById(leave.employeeId);
     if (!employee) return res.status(404).json({ error: "Employee not found" });
 
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     if (!isAdmin && employee.userId?.toString() !== session.userId) {
       return res.status(403).json({ error: "Unauthorized to revoke this leave application" });
     }
@@ -780,7 +795,7 @@ export const adminCreateLeave = async (req, res) => {
     }
 
     // Validate balance for COMP_OFF
-    if (type === "COMP_OFF") {
+    if (type === LeaveType.COMP_OFF) {
       if ((employee.leaveBalance?.compOff || 0) < chargedDays) {
         return res
           .status(400)
@@ -800,12 +815,12 @@ export const adminCreateLeave = async (req, res) => {
       workingDates,
       chargedDays,
       reason,
-      status: "APPROVED",
+      status: LeaveStatus.APPROVED,
       addedBy: req.session.email,
       adminUpdatedAt: new Date(),
     });
 
-    if (type === "PAID") {
+    if (type === LeaveType.PAID) {
       try {
         await reservePaidLeave(leave, employee, workingDates);
         await settlePaidLeaveApproval(leave, req.session.email);
@@ -833,7 +848,7 @@ export const getOnLeaveToday = async (req, res) => {
     const todayEnd = now.clone().endOf("day").toDate();
 
     const leaves = await LeaveApplication.find({
-      status: "APPROVED",
+      status: LeaveStatus.APPROVED,
       startDate: { $lte: todayEnd },
       endDate: { $gte: todayStart },
     }).populate({
@@ -872,7 +887,7 @@ export const getOnLeaveToday = async (req, res) => {
 export const getLeaveCalendar = async (req, res) => {
   try {
     const session = req.session;
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     const requestedMonth = req.query.month; // e.g. "2026-10"
 
     const baseDate = requestedMonth

@@ -8,7 +8,7 @@ import Holiday from "../models/Holiday.js";
 import CalendarOverride from "../models/CalendarOverride.js";
 import Config from "../models/Config.js";
 import sendEmail from "../config/nodemailer.js";
-import { AttendanceStatus } from "../constants/enums.js";
+import { AttendanceStatus, LeaveStatus } from "../constants/enums.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import {
   getAttendanceShiftConfig,
@@ -311,7 +311,7 @@ const leaveApplicationReminder = inngest.createFunction(
     const leaveApplication =
       await LeaveApplication.findById(leaveApplicationId);
 
-    if (leaveApplication?.status === "PENDING") {
+    if (leaveApplication?.status === LeaveStatus.PENDING) {
       const employee = await Employee.findById(
         leaveApplication.employeeId,
       ).populate("department");

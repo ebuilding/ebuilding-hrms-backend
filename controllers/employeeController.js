@@ -1,4 +1,5 @@
 import Employee from "../models/Employee.js";
+import LeaveApplication from "../models/LeaveApplication.js";
 import bcrypt from "bcrypt";
 import User from "../models/User.js";
 import Attendance from "../models/Attendance.js";
@@ -10,6 +11,8 @@ import {
   ApprovalStatus,
   EmploymentStatus,
   UserRole,
+  LeaveType,
+  LeaveStatus,
 } from "../constants/enums.js";
 
 const TZ = "Asia/Kolkata";
@@ -75,10 +78,25 @@ export const getEmployeeById = async (req, res) => {
       return res.status(404).json({ error: "Employee not found" });
     }
 
+    // Calculate approved unpaid leave days taken
+    const unpaidLeaves = await LeaveApplication.find({
+      employeeId: employee._id,
+      type: LeaveType.UNPAID,
+      status: LeaveStatus.APPROVED,
+    }).select("chargedDays isHalfDay").lean();
+
+    const unpaidTaken = unpaidLeaves.reduce((sum, l) => {
+      if (typeof l.chargedDays === "number" && !isNaN(l.chargedDays)) {
+        return sum + l.chargedDays;
+      }
+      return sum + (l.isHalfDay ? 0.5 : 1);
+    }, 0);
+
     const result = {
       ...employee,
       id: employee._id.toString(),
       departmentName: employee.department?.name || "Unassigned",
+      unpaidTaken,
       user: employee.userId
         ? { email: employee.userId.email, role: employee.userId.role }
         : null,

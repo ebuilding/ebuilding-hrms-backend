@@ -3,7 +3,7 @@ import CalendarOverride from "../models/CalendarOverride.js";
 import Holiday from "../models/Holiday.js";
 import Config from "../models/Config.js";
 import Attendance from "../models/Attendance.js";
-import { CalendarOverrideType, AttendanceStatus } from "../constants/enums.js";
+import { CalendarOverrideType, AttendanceStatus, LeaveStatus } from "../constants/enums.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import { revertLeavesForOverrideDate } from "../utils/leaveReversal.js";
 import { sendCalendarOverrideNotifications } from "../utils/calendarOverrideEmail.js";
@@ -190,7 +190,7 @@ export const createCalendarOverride = async (req, res) => {
         {
           date: { $gte: startOfTarget, $lte: endOfTarget },
           checkIn: null,
-          status: { $in: ["NOT_MARKED", "PENDING"] },
+          status: { $in: [AttendanceStatus.NOT_MARKED, LeaveStatus.PENDING] },
         },
         {
           $set: {
@@ -206,7 +206,7 @@ export const createCalendarOverride = async (req, res) => {
           {
             date: { $gte: startOfTarget, $lte: endOfTarget },
             checkIn: null,
-            status: { $in: ["WEEK_OFF", "HOLIDAY"] },
+            status: { $in: [AttendanceStatus.WEEK_OFF, AttendanceStatus.HOLIDAY] },
           },
           {
             $set: {
@@ -227,7 +227,7 @@ export const createCalendarOverride = async (req, res) => {
           {
             date: { $gte: startOfSwap, $lte: endOfSwap },
             checkIn: null,
-            status: { $in: ["WEEK_OFF", "HOLIDAY"] },
+            status: { $in: [AttendanceStatus.WEEK_OFF, AttendanceStatus.HOLIDAY] },
           },
           {
             $set: {

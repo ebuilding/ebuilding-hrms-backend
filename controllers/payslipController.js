@@ -1,5 +1,6 @@
 import Employee from "../models/Employee.js";
 import Payslip from "../models/Payslip.js";
+import { UserRole } from "../constants/enums.js";
 
 // Create payslip
 // POST /api/payslips
@@ -36,7 +37,7 @@ export const createPayslip = async (req, res) => {
 export const getPayslips = async (req, res) => {
   try {
     const session = req.session;
-    const isAdmin = session.role === "ADMIN";
+    const isAdmin = session.role === UserRole.ADMIN;
     if (isAdmin) {
       const payslips = await Payslip.find()
         .populate("employeeId")
