@@ -272,13 +272,13 @@ export const getAttendance = async (req, res) => {
                     },
                   },
                   leave: {
-                    $sum: { $cond: [{ $eq: ["$status", "LEAVE"] }, 1, 0] },
+                    $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.LEAVE] }, 1, 0] },
                   },
                   holiday: {
-                    $sum: { $cond: [{ $eq: ["$status", "HOLIDAY"] }, 1, 0] },
+                    $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.HOLIDAY] }, 1, 0] },
                   },
                   weekOff: {
-                    $sum: { $cond: [{ $eq: ["$status", "WEEK_OFF"] }, 1, 0] },
+                    $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.WEEK_OFF] }, 1, 0] },
                   },
                   halfDay: {
                     $sum: {
@@ -295,7 +295,7 @@ export const getAttendance = async (req, res) => {
                     },
                   },
                   notMarked: {
-                    $sum: { $cond: [{ $eq: ["$status", "NOT_MARKED"] }, 1, 0] },
+                    $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.NOT_MARKED] }, 1, 0] },
                   },
                   totalHours: { $sum: "$workingHours" },
                 },
@@ -364,12 +364,8 @@ export const getAttendance = async (req, res) => {
       if (schedule.isWeekOff) scheduledWeekOffs++;
     }
 
-    if ((stats.weekOff || 0) === 0) {
-      stats.weekOff = scheduledWeekOffs;
-    }
-    if ((stats.holiday || 0) === 0) {
-      stats.holiday = scheduledHolidays;
-    }
+    stats.weekOff = scheduledWeekOffs;
+    stats.holiday = scheduledHolidays;
 
     // Ensure totalHours is rounded
     stats.totalHours = parseFloat((stats.totalHours || 0).toFixed(2));
@@ -431,7 +427,7 @@ export const adminClockInOut = async (req, res) => {
     attendance.checkIn = checkInTime;
     attendance.checkOut = checkOutTime;
     attendance.compoffFor = compoffFor || "";
-    attendance.updatedBy = req.session?.email || "ADMIN";
+    attendance.updatedBy = req.session?.email || UserRole.ADMIN;
     attendance.adminUpdatedAt = new Date();
 
     if (checkInTime && checkOutTime) {
@@ -458,7 +454,7 @@ export const adminClockInOut = async (req, res) => {
       }
     } else if (checkInTime && !checkOutTime) {
       // Re-opened shift or open punch (employee can clock out at end of day)
-      attendance.workingHours = 0;
+      attendance.workingHours = null;
       attendance.dayType = dayType || DayType.FULL_DAY;
       attendance.status = status || AttendanceStatus.PRESENT;
       // Re-dispatch auto checkout reminder
@@ -572,7 +568,7 @@ export const getAttendanceStats = async (req, res) => {
       trend.push({
         date: d.format("MMM DD"),
         hours: parseFloat(hours.toFixed(2)),
-        status: record ? record.status : "LEAVE",
+        status: record ? record.status : AttendanceStatus.LEAVE,
         isOngoing,
       });
     }

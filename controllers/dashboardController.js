@@ -5,7 +5,12 @@ import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import Payslip from "../models/Payslip.js";
 import { processPaidLeaveGrants } from "../utils/paidLeave.js";
-import { AttendanceStatus } from "../constants/enums.js";
+import {
+  AttendanceStatus,
+  LeaveStatus,
+  UserRole,
+  ApprovalStatus,
+} from "../constants/enums.js";
 
 import RegistrationInvite from "../models/RegistrationInvite.js";
 import { getCelebrationsData } from "../utils/celebrations.js";
@@ -22,7 +27,7 @@ const TZ = "Asia/Kolkata";
 export const getDashboard = async (req, res) => {
   try {
     const session = req.session;
-    if (session.role === "ADMIN") {
+    if (session.role === UserRole.ADMIN) {
       const todayStart = moment.tz(TZ).startOf("day").toDate();
       const todayEnd = moment.tz(TZ).endOf("day").toDate();
       const thirtyDaysAgo = moment.tz(TZ).subtract(30, "days").startOf("day").toDate();
@@ -46,12 +51,12 @@ export const getDashboard = async (req, res) => {
           .select("firstName lastName position department profile_img email")
           .lean(),
         LeaveApplication.find({
-          status: "APPROVED",
+          status: LeaveStatus.APPROVED,
           startDate: { $lte: todayEnd },
           endDate: { $gte: todayStart },
         }).lean(),
-        LeaveApplication.countDocuments({ status: "PENDING" }),
-        LeaveApplication.countDocuments({ status: "REVOKE_REQUESTED" }),
+        LeaveApplication.countDocuments({ status: LeaveStatus.PENDING }),
+        LeaveApplication.countDocuments({ status: LeaveStatus.REVOKE_REQUESTED }),
         Department.countDocuments(),
         // Department Distribution
         Employee.aggregate([
@@ -86,7 +91,7 @@ export const getDashboard = async (req, res) => {
         ]),
         // Recent Leave Applications & Revocation Requests
         LeaveApplication.find({
-          status: { $in: ["PENDING", "REVOKE_REQUESTED"] },
+          status: { $in: [LeaveStatus.PENDING, LeaveStatus.REVOKE_REQUESTED] },
         })
           .populate("employeeId", "firstName lastName")
           .sort({ updatedAt: -1, createdAt: -1 })
@@ -286,7 +291,7 @@ export const getDashboard = async (req, res) => {
       let pendingCandidates = [];
       for (const inv of (allInvites || [])) {
         for (const sub of (inv.submissions || [])) {
-          if (sub.approvalStatus === "PENDING" && sub.employeeId) {
+          if (sub.approvalStatus === ApprovalStatus.PENDING && sub.employeeId) {
             pendingCandidates.push({
               inviteId: inv._id,
               employeeId: sub.employeeId,
@@ -330,7 +335,7 @@ export const getDashboard = async (req, res) => {
         }));
 
       return res.json({
-        role: "ADMIN",
+        role: UserRole.ADMIN,
         totalEmployees,
         totalDepartments: totalDepartments,
         todayAttendance: todayAttendanceCount,
@@ -415,6 +420,7 @@ export const getDashboard = async (req, res) => {
       const [
         monthAttendances,
         pendingLeaves,
+        approvedMonthLeaves,
         latestPayslip,
         todayRecord,
         nonWorkingDaysCount,
@@ -425,8 +431,14 @@ export const getDashboard = async (req, res) => {
         }).lean(),
         LeaveApplication.countDocuments({
           employeeId: employee._id,
-          status: { $in: ["PENDING", "REVOKE_REQUESTED"] },
+          status: { $in: [LeaveStatus.PENDING, LeaveStatus.REVOKE_REQUESTED] },
         }),
+        LeaveApplication.find({
+          employeeId: employee._id,
+          status: LeaveStatus.APPROVED,
+          startDate: { $lte: endOfMonth },
+          endDate: { $gte: startOfMonth },
+        }).lean(),
         Payslip.findOne({ employeeId: employee._id })
           .sort({ createdAt: -1 })
           .lean(),
@@ -437,9 +449,34 @@ export const getDashboard = async (req, res) => {
         Attendance.countDocuments({
           employeeId: employee._id,
           date: { $gte: startOfMonth, $lte: todayEnd },
-          status: { $in: ["WEEK_OFF", "HOLIDAY"] },
+          status: { $in: [AttendanceStatus.WEEK_OFF, AttendanceStatus.HOLIDAY] },
         }),
       ]);
+
+      // Calculate approved leave days in this month to deduct from expected working days & hours
+      // identically to Admin Attendance Reports
+      let approvedLeaveDays = 0;
+      for (const leave of approvedMonthLeaves) {
+        if (Array.isArray(leave.workingDates) && leave.workingDates.length > 0) {
+          for (const wd of leave.workingDates) {
+            const wdMoment = moment(wd).tz(TZ);
+            if (wdMoment.isBetween(startOfMonth, endOfMonth, "day", "[]")) {
+              approvedLeaveDays += leave.isHalfDay ? 0.5 : 1.0;
+            }
+          }
+        } else {
+          approvedLeaveDays += leave.isHalfDay ? 0.5 : (leave.chargedDays || 1.0);
+        }
+      }
+
+      const attLeaveCount = monthAttendances.filter(
+        (att) => att.status === AttendanceStatus.LEAVE && !att.checkIn
+      ).length;
+      const effectiveLeaveDays = Math.max(approvedLeaveDays, attLeaveCount);
+
+      // Active working days and target hours excluding approved leaves
+      const activeWorkingDays = Math.max(0, workingDaysCount - effectiveLeaveDays);
+      const targetMonthHours = parseFloat((activeWorkingDays * dailyHours).toFixed(2));
 
       // Calculate total worked minutes and present credit identically to attendanceReport
       let totalMinutesWorked = 0;
@@ -481,7 +518,6 @@ export const getDashboard = async (req, res) => {
       }
 
       const totalHoursWorked = parseFloat((totalMinutesWorked / 60).toFixed(2));
-      const targetMonthHours = targetHours;
       const hoursProgressPercentage =
         targetMonthHours > 0
           ? Math.min(
@@ -501,7 +537,7 @@ export const getDashboard = async (req, res) => {
         Math.round((presentDaysCount / expectedWorkingDays) * 100) || 0;
 
       return res.json({
-        role: "EMPLOYEE",
+        role: UserRole.EMPLOYEE,
         employee: { ...employee, id: employee._id.toString() },
         shiftConfig,
         stats: {
@@ -509,12 +545,17 @@ export const getDashboard = async (req, res) => {
           pendingLeaves,
           totalHours: totalHoursWorked,
           targetMonthHours,
+          baseTargetMonthHours: targetHours,
           workingDaysInMonth: workingDaysCount,
+          activeWorkingDays,
+          approvedLeaveDays: effectiveLeaveDays,
           dailyShiftHours: dailyHours,
           hoursProgressPercentage,
           remainingHours,
           minHoursForFullDay: shiftConfig.minHoursForFullDay,
-          shiftPolicyNote: `If any day has fewer hours, you can make up the hours on other days to complete your target monthly hours. Days with ${shiftConfig.minHoursForFullDay || 4}+ hours count as present.`,
+          shiftPolicyNote: effectiveLeaveDays > 0
+            ? `Your target is ${targetMonthHours}h (${activeWorkingDays} working days × ${dailyHours}h, excluding ${effectiveLeaveDays} approved leave day${effectiveLeaveDays > 1 ? "s" : ""}). Days with ${shiftConfig.minHoursForFullDay || 4}+ hours count as present.`
+            : `If any day has fewer hours, you can make up the hours on other days to complete your target monthly hours. Days with ${shiftConfig.minHoursForFullDay || 4}+ hours count as present.`,
           attendancePercentage: Math.min(100, calculatedPercentage),
         },
         todayRecord,

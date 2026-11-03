@@ -1,6 +1,7 @@
 import Employee from "../models/Employee.js";
+import LeaveApplication from "../models/LeaveApplication.js";
 import User from "../models/User.js";
-import { UserRole } from "../constants/enums.js";
+import { UserRole, LeaveType, LeaveStatus } from "../constants/enums.js";
 import { updateProfileSchema } from "../validators/employeeValidator.js";
 
 // Get profile
@@ -30,10 +31,26 @@ export const getProfile = async (req, res) => {
     }
 
     const role = employee.userId?.role || session.role || UserRole.EMPLOYEE;
+
+    // Calculate approved unpaid leave days taken
+    const unpaidLeaves = await LeaveApplication.find({
+      employeeId: employee._id,
+      type: LeaveType.UNPAID,
+      status: LeaveStatus.APPROVED,
+    }).select("chargedDays isHalfDay").lean();
+
+    const unpaidTaken = unpaidLeaves.reduce((sum, l) => {
+      if (typeof l.chargedDays === "number" && !isNaN(l.chargedDays)) {
+        return sum + l.chargedDays;
+      }
+      return sum + (l.isHalfDay ? 0.5 : 1);
+    }, 0);
+
     const result = {
       ...employee,
       id: employee._id.toString(),
       departmentName: employee.department?.name || "Unassigned",
+      unpaidTaken,
       role: role,
       user: employee.userId
         ? { email: employee.userId.email, role: employee.userId.role }
