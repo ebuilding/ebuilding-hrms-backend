@@ -21,6 +21,7 @@ const employeeSchema = new mongoose.Schema(
     position: { type: String, required: true },
     shiftHours: { type: Number, default: 0 },
     customShiftEnabled: { type: Boolean, default: false },
+    attendanceExempt: { type: Boolean, default: false },
     basicSalary: { type: Number, default: 0 },
     allowances: { type: Number, default: 0 },
     deductions: { type: Number, default: 0 },

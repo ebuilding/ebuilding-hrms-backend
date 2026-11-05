@@ -133,6 +133,8 @@ export const createEmployeeSchema = z.object({
     })
     .optional()
     .default(EmploymentStatus.ACTIVE),
+
+  attendanceExempt: z.boolean().optional().default(false),
 });
 
 export const registerEmployeeSchema = z.object({

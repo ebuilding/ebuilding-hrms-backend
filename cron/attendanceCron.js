@@ -216,6 +216,7 @@ export const runAttendanceCron = async () => {
     const activeEmployees = await Employee.find({
       isDeleted: false,
       employmentStatus: "ACTIVE",
+      attendanceExempt: { $ne: true },
     }).lean();
 
     cronLog.summary.totalEmployees = activeEmployees.length;
