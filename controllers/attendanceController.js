@@ -377,7 +377,10 @@ export const getAttendance = async (req, res) => {
       stats,
       shiftConfig,
       calendarDays,
-      employee: { isDeleted: employee.isDeleted },
+      employee: {
+        isDeleted: employee.isDeleted,
+        attendanceExempt: Boolean(employee.attendanceExempt),
+      },
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

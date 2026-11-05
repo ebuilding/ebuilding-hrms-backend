@@ -141,6 +141,7 @@ export const createEmployee = async (req, res) => {
       profile_img,
       shiftHours,
       employmentStatus,
+      attendanceExempt,
     } = parseResult.data;
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -172,6 +173,7 @@ export const createEmployee = async (req, res) => {
       profile_img,
       shiftHours,
       employmentStatus,
+      attendanceExempt,
     });
 
     // Send welcome email with login credentials

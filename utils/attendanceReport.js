@@ -160,8 +160,11 @@ export const calculateMonthlyReportData = async (monthStr) => {
   const summary = [];
   const detailed = [];
 
+  // Attendance-exempt employees are tracked in headcount but not in punch expectations
+  const reportEmployees = employees.filter((emp) => !emp.attendanceExempt);
+
   // 2. Compute statistics for each employee
-  employees.forEach((emp, index) => {
+  reportEmployees.forEach((emp, index) => {
     const empIdStr = emp._id.toString();
     const empAttendancesMap = attendanceByEmp.get(empIdStr) || new Map();
     const empLeavesMap = leavesByEmp.get(empIdStr) || new Map();
@@ -233,6 +236,9 @@ export const calculateMonthlyReportData = async (monthStr) => {
         }
       } else {
         // Working Day
+        const isHalfDayLeave = Boolean(approvedLeave?.isHalfDay);
+        const halfShiftMinutes = Math.round((dailyShift / 2) * 60);
+
         if (att && att.checkIn) {
           // Employee punched in/out!
           checkInStr = moment(att.checkIn).tz(TZ).format("hh:mm A");
@@ -247,14 +253,27 @@ export const calculateMonthlyReportData = async (monthStr) => {
             );
           }
 
-          if (
+          if (isHalfDayLeave) {
+            // Approved half-day leave: the punch only covers the remaining half,
+            // so hours are measured against half a shift and leave credits 0.5
+            statusCode = AttendanceStatus.HALF_DAY;
+            status = AttendanceStatusLabel[AttendanceStatus.HALF_DAY];
+            leaveCredit = 0.5;
+            presentCredit =
+              dayWorkedMinutes >= minFullDayMinutes
+                ? 0.5
+                : dayWorkedMinutes > 0
+                  ? 0.25
+                  : 0;
+            dayExpectedMinutes = halfShiftMinutes;
+          } else if (
             att.dayType === DayType.HALF_DAY ||
             (dayWorkedMinutes > 0 && dayWorkedMinutes < minFullDayMinutes)
           ) {
             statusCode = AttendanceStatus.HALF_DAY;
             status = AttendanceStatusLabel[AttendanceStatus.HALF_DAY];
             presentCredit = 0.5;
-            dayExpectedMinutes = Math.round((dailyShift / 2) * 60);
+            dayExpectedMinutes = halfShiftMinutes;
           } else {
             statusCode = AttendanceStatus.PRESENT;
             status = AttendanceStatusLabel[AttendanceStatus.PRESENT];
@@ -264,12 +283,22 @@ export const calculateMonthlyReportData = async (monthStr) => {
         } else {
           // NO punch in/out on a working day!
           if (approvedLeave || att?.status === AttendanceStatus.LEAVE) {
+            const isHalf =
+              approvedLeave?.isHalfDay || att?.dayType === DayType.HALF_DAY;
             statusCode = AttendanceStatus.LEAVE;
-            status = AttendanceStatusLabel[AttendanceStatus.LEAVE];
-            const isHalf = approvedLeave?.isHalfDay || att?.dayType === DayType.HALF_DAY;
-            leaveCredit = isHalf ? 0.5 : 1.0;
-            dayExpectedMinutes = 0; // Excused leave day
             dayWorkedMinutes = 0;
+            if (isHalf) {
+              // Half-day leave without a punch: the other half is a missed punch,
+              // so it carries half-shift expectation and not-marked credit
+              status = "Half Day Leave";
+              leaveCredit = 0.5;
+              notMarkedCredit = 0.5;
+              dayExpectedMinutes = halfShiftMinutes;
+            } else {
+              status = AttendanceStatusLabel[AttendanceStatus.LEAVE];
+              leaveCredit = 1.0;
+              dayExpectedMinutes = 0; // Excused leave day
+            }
           } else {
             // "If no punch in out on working day it is not marked."
             statusCode = AttendanceStatus.NOT_MARKED;

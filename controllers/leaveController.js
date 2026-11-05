@@ -204,9 +204,14 @@ export const getLeaves = async (req, res) => {
     const hasPaidPolicy = Boolean(policy);
 
     if (isAdmin) {
-      const { status, year } = req.query;
+      const { status, year, month } = req.query;
       const where = status ? { status } : {};
-      if (year && !isNaN(parseInt(year, 10))) {
+      if (month && /^\d{4}-\d{2}$/.test(month)) {
+        const startOfMonth = moment.tz(`${month}-01`, TZ).startOf("month").toDate();
+        const endOfMonth = moment.tz(`${month}-01`, TZ).endOf("month").toDate();
+        where.startDate = { $lte: endOfMonth };
+        where.endDate = { $gte: startOfMonth };
+      } else if (year && !isNaN(parseInt(year, 10))) {
         const y = parseInt(year, 10);
         const startOfYear = moment.tz(`${y}-01-01`, TZ).startOf("year").toDate();
         const endOfYear = moment.tz(`${y}-12-31`, TZ).endOf("year").toDate();
@@ -244,9 +249,14 @@ export const getLeaves = async (req, res) => {
         .select("firstName lastName leaveBalance isDeleted")
         .lean();
 
-      const { year } = req.query;
+      const { year, month } = req.query;
       const where = { employeeId: employee._id };
-      if (year && !isNaN(parseInt(year, 10))) {
+      if (month && /^\d{4}-\d{2}$/.test(month)) {
+        const startOfMonth = moment.tz(`${month}-01`, TZ).startOf("month").toDate();
+        const endOfMonth = moment.tz(`${month}-01`, TZ).endOf("month").toDate();
+        where.startDate = { $lte: endOfMonth };
+        where.endDate = { $gte: startOfMonth };
+      } else if (year && !isNaN(parseInt(year, 10))) {
         const y = parseInt(year, 10);
         const startOfYear = moment.tz(`${y}-01-01`, TZ).startOf("year").toDate();
         const endOfYear = moment.tz(`${y}-12-31`, TZ).endOf("year").toDate();

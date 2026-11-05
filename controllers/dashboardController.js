@@ -48,7 +48,7 @@ export const getDashboard = async (req, res) => {
       ] = await Promise.all([
         Employee.find({ isDeleted: { $ne: true } })
           .populate("department", "name")
-          .select("firstName lastName position department profile_img email")
+          .select("firstName lastName position department profile_img email attendanceExempt")
           .lean(),
         LeaveApplication.find({
           status: LeaveStatus.APPROVED,
@@ -99,11 +99,12 @@ export const getDashboard = async (req, res) => {
           .lean(),
         // Celebrations (Birthdays & Anniversaries)
         getCelebrationsData(30),
-        // Today's attendance records with punch-in
+        // Today's attendance records with punch-in (sorted by earliest check-in first)
         Attendance.find({
           date: { $gte: todayStart, $lte: todayEnd },
           checkIn: { $ne: null },
         })
+          .sort({ checkIn: 1 })
           .populate({
             path: "employeeId",
             select: "firstName lastName position profile_img department",
@@ -199,9 +200,12 @@ export const getDashboard = async (req, res) => {
       const currentlyWorkingCount = punchedInList.filter((item) => !item.isClockedOut).length;
       const clockedOutCount = punchedInList.filter((item) => item.isClockedOut).length;
 
-      // List of employees who have NOT punched in today
+      // List of employees who have NOT punched in today (attendance-exempt staff excluded)
       const notPunchedInList = allActiveEmployees
-        .filter((emp) => !todayAttendanceMap.has(emp._id.toString()))
+        .filter(
+          (emp) =>
+            !emp.attendanceExempt && !todayAttendanceMap.has(emp._id.toString()),
+        )
         .map((emp) => {
           const isOnLeave = onLeaveEmployeeIds.has(emp._id.toString());
           return {
@@ -217,7 +221,18 @@ export const getDashboard = async (req, res) => {
         });
 
       const todayAttendanceCount = punchedInList.length;
-      const notMarkedCount = Math.max(0, totalEmployees - todayAttendanceCount - onLeaveCount);
+      // Exempt employees who never punched are removed from the expected pool
+      const exemptNotPunchedCount = allActiveEmployees.filter(
+        (emp) =>
+          emp.attendanceExempt && !todayAttendanceMap.has(emp._id.toString()),
+      ).length;
+      const notMarkedCount = Math.max(
+        0,
+        totalEmployees -
+          todayAttendanceCount -
+          onLeaveCount -
+          exemptNotPunchedCount,
+      );
 
       const attendanceDistribution = [
         { name: "Present", value: todayAttendanceCount, color: "#10b981" },
@@ -270,7 +285,8 @@ export const getDashboard = async (req, res) => {
             scheduledStartTime: lateInfo.scheduledStartTime,
             graceThresholdTime: lateInfo.graceThresholdTime,
           };
-        });
+        })
+        .sort((a, b) => (b.lateMinutes || 0) - (a.lateMinutes || 0));
 
       // Format missing punch-outs
       const formattedMissing = missingPunchOuts
