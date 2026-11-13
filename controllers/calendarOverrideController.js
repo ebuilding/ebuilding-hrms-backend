@@ -5,7 +5,11 @@ import Config from "../models/Config.js";
 import Attendance from "../models/Attendance.js";
 import { CalendarOverrideType, AttendanceStatus, LeaveStatus } from "../constants/enums.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
-import { revertLeavesForOverrideDate } from "../utils/leaveReversal.js";
+import {
+  revertLeavesForOverrideDate,
+  syncLeavesForWorkingOverrideDate,
+  syncAllCalendarOverridesWithLeaves,
+} from "../utils/leaveReversal.js";
 import { sendCalendarOverrideNotifications } from "../utils/calendarOverrideEmail.js";
 
 const TIMEZONE = "Asia/Kolkata";
@@ -47,6 +51,10 @@ export const createCalendarOverride = async (req, res) => {
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: "Title is required for the override" });
+    }
+
+    if (reason && reason.trim().length > 250) {
+      return res.status(400).json({ error: "Reason cannot exceed 250 characters" });
     }
 
     if (!date) {
@@ -178,6 +186,21 @@ export const createCalendarOverride = async (req, res) => {
     let affectedLeaves = [];
     if (type === CalendarOverrideType.HOLIDAY || type === CalendarOverrideType.SWAP) {
       affectedLeaves = await revertLeavesForOverrideDate(normalizedDate, title);
+    }
+
+    // If type is SWAP (with compensatory swapDate) or WORKING_DAY ->
+    // Synchronize any existing leaves overlapping this working day and upsert Attendance as LEAVE
+    let syncedWorkLeaves = [];
+    if (type === CalendarOverrideType.SWAP && normalizedSwapDate) {
+      syncedWorkLeaves = await syncLeavesForWorkingOverrideDate(
+        normalizedSwapDate,
+        `${title.trim()} (Swap Work)`,
+      );
+    } else if (type === CalendarOverrideType.WORKING_DAY) {
+      syncedWorkLeaves = await syncLeavesForWorkingOverrideDate(
+        normalizedDate,
+        `${title.trim()} (Working Day)`,
+      );
     }
 
     // Synchronize existing unpunched Attendance records for the overridden dates
@@ -327,5 +350,23 @@ export const deleteCalendarOverride = async (req, res) => {
   } catch (error) {
     console.error("deleteCalendarOverride Error:", error);
     return res.status(500).json({ error: "Failed to delete schedule override" });
+  }
+};
+
+/**
+ * POST /api/calendar-overrides/sync-leaves
+ * Admin utility to manually or automatically re-synchronize all calendar overrides with leaves
+ */
+export const syncCalendarOverridesWithLeavesController = async (req, res) => {
+  try {
+    const report = await syncAllCalendarOverridesWithLeaves();
+    return res.json({
+      success: true,
+      message: "All calendar overrides and leaves synchronized successfully",
+      report,
+    });
+  } catch (error) {
+    console.error("syncCalendarOverridesWithLeaves Error:", error);
+    return res.status(500).json({ error: "Failed to synchronize calendar overrides with leaves" });
   }
 };

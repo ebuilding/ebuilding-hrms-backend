@@ -19,6 +19,10 @@ import {
   getAttendanceShiftConfig,
   determineAttendanceDayType,
 } from "../utils/shiftConfig.js";
+import {
+  generatePunchToken,
+  verifyAndConsumePunchToken,
+} from "../utils/punchToken.js";
 
 const TZ = "Asia/Kolkata";
 
@@ -59,14 +63,43 @@ const parseLocalTime = (time, baseDate) => {
   return moment.tz(`${dateStr} ${time}`, "YYYY-MM-DD HH:mm", TZ).toDate();
 };
 
+// Generate single-use ephemeral punch token (45s expiration)
+// GET /api/attendance/punch-token
+export const getPunchToken = async (req, res) => {
+  try {
+    const session = req.session;
+    if (!session?.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const result = await generatePunchToken(session.userId, req.headers["user-agent"]);
+    return res.json(result);
+  } catch (error) {
+    console.error("getPunchToken Error:", error);
+    return res
+      .status(500)
+      .json({ error: "Failed to generate punch authorization token" });
+  }
+};
+
 // Clock in/out for employee
 // POST /api/attendance
 export const clockInOut = async (req, res) => {
   try {
     const session = req.session;
+
+    // Verify single-use ephemeral punch token for non-admin requests or employee self-punches
+    const isAdminOverride = Boolean(req.body?.employeeId && session.role === UserRole.ADMIN);
+    if (!isAdminOverride) {
+      const punchToken = req.body?.punchToken;
+      const verification = await verifyAndConsumePunchToken(punchToken, session.userId, req);
+      if (!verification.valid) {
+        return res.status(403).json({ error: verification.error });
+      }
+    }
+
     let employee;
 
-    if (req.body?.employeeId && session.role === UserRole.ADMIN) {
+    if (isAdminOverride) {
       employee = await Employee.findById(req.body.employeeId);
     } else {
       employee = await Employee.findOne({ userId: session.userId });

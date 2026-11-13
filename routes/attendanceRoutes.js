@@ -2,6 +2,7 @@ import { Router } from "express";
 import { protect, protectAdmin } from "../middleware/auth.js";
 import {
   clockInOut,
+  getPunchToken,
   getAttendance,
   adminClockInOut,
   deleteAdminAttendance,
@@ -14,6 +15,7 @@ import {
 
 const attendanceRouter = Router();
 
+attendanceRouter.get("/punch-token", protect, getPunchToken);
 attendanceRouter.post("/", protect, clockInOut);
 attendanceRouter.post("/history", protect, getAttendance);
 attendanceRouter.get(
