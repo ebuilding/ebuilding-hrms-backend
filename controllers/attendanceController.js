@@ -5,8 +5,10 @@ import Employee from "../models/Employee.js";
 import Config from "../models/Config.js";
 import Holiday from "../models/Holiday.js";
 import CalendarOverride from "../models/CalendarOverride.js";
+import LeaveApplication from "../models/LeaveApplication.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import { getCompOffLabelForDate } from "../utils/compOff.js";
+import { restoreBaselineAttendance } from "../utils/attendanceBaseline.js";
 import ExcelJS from "exceljs";
 import {
   UserRole,
@@ -14,6 +16,7 @@ import {
   DayType,
   CompOffType,
   ReportExportType,
+  LeaveStatus,
 } from "../constants/enums.js";
 import {
   getAttendanceShiftConfig,
@@ -274,6 +277,7 @@ export const getAttendance = async (req, res) => {
       holidays,
       overrides,
       weekOffConfigDoc,
+      approvedLeaves,
     ] = await Promise.all([
       getAttendanceShiftConfig(),
       Attendance.aggregate([
@@ -351,6 +355,12 @@ export const getAttendance = async (req, res) => {
         ],
       }).lean(),
       Config.findOne({ key: "weekOffDays" }).lean(),
+      LeaveApplication.find({
+        employeeId: employee._id,
+        status: LeaveStatus.APPROVED,
+        startDate: { $lte: endOfMonth },
+        endDate: { $gte: startOfMonth },
+      }).lean(),
     ]);
 
     const history = results[0].history;
@@ -363,6 +373,92 @@ export const getAttendance = async (req, res) => {
       notMarked: 0,
       totalHours: 0,
     };
+
+    // Map active (non-reverted) approved leave dates in this month
+    const activeLeaveMap = new Map();
+    for (const leave of approvedLeaves) {
+      const revertedKeys = new Set(
+        (leave.revertedDates || []).map((rd) => moment(rd).tz(TZ).format("YYYY-MM-DD"))
+      );
+
+      if (Array.isArray(leave.workingDates) && leave.workingDates.length > 0) {
+        for (const wd of leave.workingDates) {
+          const dKey = moment(wd).tz(TZ).format("YYYY-MM-DD");
+          if (!revertedKeys.has(dKey)) {
+            activeLeaveMap.set(dKey, leave);
+          }
+        }
+      } else {
+        const cur = moment(leave.startDate).tz(TZ).startOf("day");
+        const end = moment(leave.endDate).tz(TZ).startOf("day");
+        while (cur.isSameOrBefore(end, "day")) {
+          const dKey = cur.format("YYYY-MM-DD");
+          if (!revertedKeys.has(dKey)) {
+            activeLeaveMap.set(dKey, leave);
+          }
+          cur.add(1, "day");
+        }
+      }
+    }
+
+    // Ensure approved leaves without punches are present in attendance history
+    const historyDateKeys = new Set(
+      history.map((h) => moment(h.date).tz(TZ).format("YYYY-MM-DD"))
+    );
+
+    activeLeaveMap.forEach((leave, dKey) => {
+      const cur = moment.tz(dKey, "YYYY-MM-DD", TZ);
+      if (
+        !historyDateKeys.has(dKey) &&
+        cur.isSameOrAfter(startOfMonth, "day") &&
+        cur.isSameOrBefore(endOfMonth, "day")
+      ) {
+        history.push({
+          _id: `synth-leave-${leave._id}-${dKey}`,
+          employeeId: employee._id,
+          date: cur.toDate(),
+          status: AttendanceStatus.LEAVE,
+          dayType: leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY,
+          halfDayType: leave.halfDayType || null,
+          checkIn: null,
+          checkOut: null,
+          workingHours: 0,
+          isDirectAdminLeave: Boolean(leave.addedBy),
+          notes: leave.reason || "Approved Leave",
+        });
+        historyDateKeys.add(dKey);
+      }
+    });
+
+    // Check records where employee worked on an active approved leave day
+    let workedOnLeaveDaysCount = 0;
+    for (const rec of history) {
+      const dKey = moment(rec.date).tz(TZ).format("YYYY-MM-DD");
+      const activeLeave = activeLeaveMap.get(dKey);
+      if (activeLeave && (rec.checkIn || rec.status === AttendanceStatus.PRESENT)) {
+        rec.activeLeave = {
+          leaveId: activeLeave._id,
+          type: activeLeave.type,
+          reason: activeLeave.reason,
+          message: "Active approved leave on this date. Revert leave in Leave Management to refund leave balance.",
+        };
+        workedOnLeaveDaysCount++;
+      }
+    }
+
+    // Stats synchronization:
+    // Total approved leave days in this month
+    let totalApprovedLeaveDays = 0;
+    activeLeaveMap.forEach((leave, dKey) => {
+      const cur = moment.tz(dKey, "YYYY-MM-DD", TZ);
+      if (cur.isSameOrAfter(startOfMonth, "day") && cur.isSameOrBefore(endOfMonth, "day")) {
+        totalApprovedLeaveDays += leave.isHalfDay ? 0.5 : 1.0;
+      }
+    });
+
+    // Total leaves: match approved leave count (8 before revert, 5 after revert)
+    stats.leave = Math.max(totalApprovedLeaveDays, stats.leave || 0);
+    stats.workedOnLeaveDays = workedOnLeaveDaysCount;
 
     // Build calendarDays map for every day in the month using the schedule resolver
     const weekOffConfig = weekOffConfigDoc?.value || { weeklyDays: ["Sunday"] };
@@ -440,10 +536,13 @@ export const adminClockInOut = async (req, res) => {
 
     // If admin requested full deletion of this day's attendance
     if (deleteRecord) {
-      if (attendance) {
-        await Attendance.findByIdAndDelete(attendance._id);
-      }
-      return res.json({ success: true, message: "Attendance record removed successfully" });
+      const result = await restoreBaselineAttendance(employeeId, baseDate);
+      return res.json({
+        success: true,
+        message: result.message,
+        restored: result.restored,
+        status: result.status,
+      });
     }
 
     const checkInTime = parseLocalTime(checkIn, baseDate);
@@ -519,15 +618,14 @@ export const deleteAdminAttendance = async (req, res) => {
     const baseDate = parseLocalDate(date);
     if (!baseDate) return res.status(400).json({ error: "Invalid date" });
 
-    const todayStart = moment(baseDate).tz(TZ).startOf("day").toDate();
-    const todayEnd = moment(baseDate).tz(TZ).endOf("day").toDate();
+    const result = await restoreBaselineAttendance(employeeId, baseDate);
 
-    await Attendance.findOneAndDelete({
-      employeeId,
-      date: { $gte: todayStart, $lte: todayEnd },
+    res.json({
+      success: true,
+      message: result.message,
+      restored: result.restored,
+      status: result.status,
     });
-
-    res.json({ success: true, message: "Attendance record deleted successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

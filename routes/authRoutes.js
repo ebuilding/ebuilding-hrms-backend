@@ -2,6 +2,8 @@ import { Router } from "express";
 import {
   changePassword,
   login,
+  refreshToken,
+  logout,
   session,
   registerEmployee,
   forgotPassword,
@@ -13,6 +15,8 @@ import { protect } from "../middleware/auth.js";
 const authRouter = Router();
 
 authRouter.post("/login", login);
+authRouter.post("/refresh-token", refreshToken);
+authRouter.post("/logout", logout);
 authRouter.post("/register-employee", registerEmployee);
 authRouter.get("/session", protect, session);
 authRouter.post("/change-password", protect, changePassword);

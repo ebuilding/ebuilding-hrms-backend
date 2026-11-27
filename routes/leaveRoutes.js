@@ -12,6 +12,7 @@ import {
   deletePendingLeave,
   requestRevokeLeave,
   processRevokeLeave,
+  revertPartialLeaveDates,
 } from "../controllers/leaveController.js";
 
 const leaveRouter = Router();
@@ -27,6 +28,7 @@ leaveRouter.put("/:id", protect, editPendingLeave);
 leaveRouter.delete("/:id", protect, deletePendingLeave);
 leaveRouter.post("/:id/revoke-request", protect, requestRevokeLeave);
 leaveRouter.patch("/:id/revoke", protect, protectAdmin, processRevokeLeave);
+leaveRouter.patch("/:id/revert-dates", protect, protectAdmin, revertPartialLeaveDates);
 
 export default leaveRouter;
 
