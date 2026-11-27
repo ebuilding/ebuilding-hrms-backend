@@ -5,6 +5,7 @@ import { getEmailTemplate } from "../utils/emailTemplates.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import LeavePolicy from "../models/LeavePolicy.js";
+import LeaveLedger from "../models/LeaveLedger.js";
 import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
 import CalendarOverride from "../models/CalendarOverride.js";
@@ -54,11 +55,24 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
     });
 
     if (attendanceRecord) {
-      attendanceRecord.status = AttendanceStatus.LEAVE;
-      attendanceRecord.dayType = leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY;
-      attendanceRecord.checkIn = null;
-      attendanceRecord.checkOut = null;
-      attendanceRecord.workingHours = null;
+      if (leave.isHalfDay) {
+        // For half-day leaves, DO NOT wipe existing punches and working hours!
+        attendanceRecord.dayType = DayType.HALF_DAY;
+        attendanceRecord.halfDayType = leave.halfDayType || null;
+        if (!attendanceRecord.checkIn) {
+          attendanceRecord.status = AttendanceStatus.LEAVE;
+        } else {
+          attendanceRecord.status = AttendanceStatus.HALF_DAY;
+        }
+      } else {
+        // Full-day leave: employee is on leave the entire day
+        attendanceRecord.status = AttendanceStatus.LEAVE;
+        attendanceRecord.dayType = DayType.FULL_DAY;
+        attendanceRecord.halfDayType = null;
+        attendanceRecord.checkIn = null;
+        attendanceRecord.checkOut = null;
+        attendanceRecord.workingHours = null;
+      }
       attendanceRecord.isDirectAdminLeave = isDirectAdminLeave;
       if (isDirectAdminLeave) {
         attendanceRecord.updatedBy = leave.addedBy || adminEmail || "System";
@@ -74,6 +88,7 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
         date: dateStart,
         status: AttendanceStatus.LEAVE,
         dayType: leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY,
+        halfDayType: leave.isHalfDay ? (leave.halfDayType || null) : null,
         checkIn: null,
         checkOut: null,
         workingHours: null,
@@ -826,6 +841,25 @@ export const revertPartialLeaveDates = async (req, res) => {
           { _id: employee._id },
           { $inc: { "leaveBalance.paid": actualRefund } }
         );
+
+        if (leave.paidPolicyId) {
+          try {
+            await LeaveLedger.create({
+              employeeId: employee._id,
+              policyId: leave.paidPolicyId,
+              leaveApplicationId: leave._id,
+              type: "RELEASE",
+              amount: actualRefund,
+              balanceChange: actualRefund,
+              effectiveAt: new Date(),
+              idempotencyKey: `revert-dates:${leave._id}:${validDatesToRevert.sort().join(",")}`,
+              createdBy: req.session?.email || "Admin",
+              note: `Leave reverted for ${validDatesToRevert.length} day(s) (${validDatesToRevert.join(", ")})`,
+            });
+          } catch (ledgerErr) {
+            console.error("Ledger revert entry error (non-fatal):", ledgerErr);
+          }
+        }
       } else if (leave.type === LeaveType.COMP_OFF) {
         await Employee.updateOne(
           { _id: employee._id },

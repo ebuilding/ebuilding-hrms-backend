@@ -10,6 +10,7 @@ import {
   LeaveStatus,
   UserRole,
   ApprovalStatus,
+  DayType,
 } from "../constants/enums.js";
 
 import RegistrationInvite from "../models/RegistrationInvite.js";
@@ -517,7 +518,7 @@ export const getDashboard = async (req, res) => {
                 $cond: [
                   { $gt: [{ $size: "$activeWorkingDates" }, 0] },
                   { $multiply: [{ $size: "$activeWorkingDates" }, { $cond: ["$isHalfDay", 0.5, 1.0] }] },
-                  { $ifNull: ["$chargedDays", 1.0] },
+                  { $ifNull: ["$chargedDays", { $cond: ["$isHalfDay", 0.5, 1.0] }] },
                 ],
               },
             },
@@ -566,7 +567,7 @@ export const getDashboard = async (req, res) => {
                         { $or: [{ $eq: ["$checkIn", null] }, { $not: ["$checkIn"] }] },
                       ],
                     },
-                    1.0,
+                    { $cond: [{ $eq: ["$dayType", DayType.HALF_DAY] }, 0.5, 1.0] },
                     0.0,
                   ],
                 },

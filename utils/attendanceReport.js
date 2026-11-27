@@ -144,7 +144,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
             $cond: [
               { $gt: [{ $size: "$activeWorkingDates" }, 0] },
               { $multiply: [{ $size: "$activeWorkingDates" }, { $cond: ["$isHalfDay", 0.5, 1.0] }] },
-              { $ifNull: ["$chargedDays", 1.0] },
+              { $ifNull: ["$chargedDays", { $cond: ["$isHalfDay", 0.5, 1.0] }] },
             ],
           },
         },
@@ -370,14 +370,22 @@ export const calculateMonthlyReportData = async (monthStr) => {
           }
 
           if (approvedLeave) {
-            // Employee punched in on an approved leave day (e.g. early return before admin reverted)
-            statusCode = AttendanceStatus.PRESENT;
-            status = AttendanceStatusLabel[AttendanceStatus.PRESENT];
-            presentCredit = isHalfDayLeave
-              ? dayWorkedMinutes >= minFullDayMinutes ? 0.5 : 0
-              : 1.0;
-            // On an approved leave day, employee is excused from mandatory shift; worked hours count as surplus
-            dayExpectedMinutes = isHalfDayLeave ? halfShiftMinutes : 0;
+            if (isHalfDayLeave) {
+              // Approved half-day leave with punch:
+              // The punch covers the worked half, so hours are measured against half a shift and leave credits 0.5
+              statusCode = AttendanceStatus.HALF_DAY;
+              status = AttendanceStatusLabel[AttendanceStatus.HALF_DAY];
+              leaveCredit = 0.5;
+              presentCredit = dayWorkedMinutes >= minFullDayMinutes ? 0.5 : 0;
+              dayExpectedMinutes = halfShiftMinutes;
+            } else {
+              // Employee punched in on a full-day approved leave day (e.g. early return before admin reverted)
+              statusCode = AttendanceStatus.PRESENT;
+              status = AttendanceStatusLabel[AttendanceStatus.PRESENT];
+              presentCredit = 1.0;
+              // On an approved leave day, employee is excused from mandatory shift; worked hours count as surplus
+              dayExpectedMinutes = 0;
+            }
           } else if (isHalfDayLeave) {
             // Approved half-day leave: the punch only covers the remaining half,
             // so hours are measured against half a shift and leave credits 0.5
