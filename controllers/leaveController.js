@@ -54,11 +54,24 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
     });
 
     if (attendanceRecord) {
-      attendanceRecord.status = AttendanceStatus.LEAVE;
-      attendanceRecord.dayType = leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY;
-      attendanceRecord.checkIn = null;
-      attendanceRecord.checkOut = null;
-      attendanceRecord.workingHours = null;
+      if (leave.isHalfDay) {
+        // For half-day leaves, DO NOT wipe existing punches and working hours!
+        attendanceRecord.dayType = DayType.HALF_DAY;
+        attendanceRecord.halfDayType = leave.halfDayType || null;
+        if (!attendanceRecord.checkIn) {
+          attendanceRecord.status = AttendanceStatus.LEAVE;
+        } else {
+          attendanceRecord.status = AttendanceStatus.HALF_DAY;
+        }
+      } else {
+        // Full-day leave: employee is on leave the entire day
+        attendanceRecord.status = AttendanceStatus.LEAVE;
+        attendanceRecord.dayType = DayType.FULL_DAY;
+        attendanceRecord.halfDayType = null;
+        attendanceRecord.checkIn = null;
+        attendanceRecord.checkOut = null;
+        attendanceRecord.workingHours = null;
+      }
       attendanceRecord.isDirectAdminLeave = isDirectAdminLeave;
       if (isDirectAdminLeave) {
         attendanceRecord.updatedBy = leave.addedBy || adminEmail || "System";
@@ -74,6 +87,7 @@ const syncLeaveWithAttendance = async (leave, adminEmail) => {
         date: dateStart,
         status: AttendanceStatus.LEAVE,
         dayType: leave.isHalfDay ? DayType.HALF_DAY : DayType.FULL_DAY,
+        halfDayType: leave.isHalfDay ? (leave.halfDayType || null) : null,
         checkIn: null,
         checkOut: null,
         workingHours: null,

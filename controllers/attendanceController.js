@@ -309,7 +309,13 @@ export const getAttendance = async (req, res) => {
                     },
                   },
                   leave: {
-                    $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.LEAVE] }, 1, 0] },
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$status", AttendanceStatus.LEAVE] },
+                        { $cond: [{ $eq: ["$dayType", DayType.HALF_DAY] }, 0.5, 1.0] },
+                        0,
+                      ],
+                    },
                   },
                   holiday: {
                     $sum: { $cond: [{ $eq: ["$status", AttendanceStatus.HOLIDAY] }, 1, 0] },
@@ -321,9 +327,14 @@ export const getAttendance = async (req, res) => {
                     $sum: {
                       $cond: [
                         {
-                          $or: [
-                            { $eq: ["$dayType", DayType.HALF_DAY] },
-                            { $eq: ["$status", AttendanceStatus.HALF_DAY] },
+                          $and: [
+                            { $ne: ["$status", AttendanceStatus.LEAVE] },
+                            {
+                              $or: [
+                                { $eq: ["$dayType", DayType.HALF_DAY] },
+                                { $eq: ["$status", AttendanceStatus.HALF_DAY] },
+                              ],
+                            },
                           ],
                         },
                         1,
@@ -430,12 +441,12 @@ export const getAttendance = async (req, res) => {
       }
     });
 
-    // Check records where employee worked on an active approved leave day
+    // Check records where employee worked on an active approved full-day leave
     let workedOnLeaveDaysCount = 0;
     for (const rec of history) {
       const dKey = moment(rec.date).tz(TZ).format("YYYY-MM-DD");
       const activeLeave = activeLeaveMap.get(dKey);
-      if (activeLeave && (rec.checkIn || rec.status === AttendanceStatus.PRESENT)) {
+      if (activeLeave && !activeLeave.isHalfDay && (rec.checkIn || rec.status === AttendanceStatus.PRESENT)) {
         rec.activeLeave = {
           leaveId: activeLeave._id,
           type: activeLeave.type,
@@ -456,7 +467,7 @@ export const getAttendance = async (req, res) => {
       }
     });
 
-    // Total leaves: match approved leave count (8 before revert, 5 after revert)
+    // Total leaves: match approved leave count (e.g. 7.0 for 6 full days + 2 half days)
     stats.leave = Math.max(totalApprovedLeaveDays, stats.leave || 0);
     stats.workedOnLeaveDays = workedOnLeaveDaysCount;
 
