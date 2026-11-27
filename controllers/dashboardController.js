@@ -440,6 +440,8 @@ export const getDashboard = async (req, res) => {
         latestPayslip,
         todayRecord,
         nonWorkingDaysCount,
+        leaveAggregates,
+        attendanceAggregates,
       ] = await Promise.all([
         Attendance.find({
           employeeId: employee._id,
@@ -465,60 +467,126 @@ export const getDashboard = async (req, res) => {
         Attendance.countDocuments({
           employeeId: employee._id,
           date: { $gte: startOfMonth, $lte: todayEnd },
-          status: { $in: [AttendanceStatus.WEEK_OFF, AttendanceStatus.HOLIDAY] },
+          status: { $in: [AttendanceStatus.WEEK_OFF, AttendanceStatus.HOLIDAY, AttendanceStatus.LEAVE] },
         }),
+        LeaveApplication.aggregate([
+          {
+            $match: {
+              employeeId: employee._id,
+              status: LeaveStatus.APPROVED,
+              startDate: { $lte: endOfMonth },
+              endDate: { $gte: startOfMonth },
+            },
+          },
+          {
+            $project: {
+              isHalfDay: 1,
+              chargedDays: 1,
+              activeWorkingDates: {
+                $filter: {
+                  input: { $ifNull: ["$workingDates", []] },
+                  as: "d",
+                  cond: {
+                    $and: [
+                      { $gte: ["$$d", startOfMonth] },
+                      { $lte: ["$$d", endOfMonth] },
+                      {
+                        $not: {
+                          $in: [
+                            { $dateToString: { date: "$$d", timezone: TZ, format: "%Y-%m-%d" } },
+                            {
+                              $map: {
+                                input: { $ifNull: ["$revertedDates", []] },
+                                as: "rd",
+                                in: { $dateToString: { date: "$$rd", timezone: TZ, format: "%Y-%m-%d" } },
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              isHalfDay: 1,
+              leaveDays: {
+                $cond: [
+                  { $gt: [{ $size: "$activeWorkingDates" }, 0] },
+                  { $multiply: [{ $size: "$activeWorkingDates" }, { $cond: ["$isHalfDay", 0.5, 1.0] }] },
+                  { $ifNull: ["$chargedDays", 1.0] },
+                ],
+              },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalApprovedLeaves: { $sum: "$leaveDays" },
+            },
+          },
+        ]),
+        Attendance.aggregate([
+          {
+            $match: {
+              employeeId: employee._id,
+              date: { $gte: startOfMonth, $lte: endOfMonth },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalMinutesWorked: {
+                $sum: {
+                  $cond: [
+                    { $and: [{ $ne: ["$workingHours", null] }, { $gte: ["$workingHours", 0] }] },
+                    { $round: [{ $multiply: ["$workingHours", 60] }] },
+                    0,
+                  ],
+                },
+              },
+              presentDaysCount: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", AttendanceStatus.PRESENT] },
+                    1.0,
+                    { $cond: [{ $eq: ["$status", AttendanceStatus.HALF_DAY] }, 0.5, 0.0] },
+                  ],
+                },
+              },
+              attLeaveCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ["$status", AttendanceStatus.LEAVE] },
+                        { $or: [{ $eq: ["$checkIn", null] }, { $not: ["$checkIn"] }] },
+                      ],
+                    },
+                    1.0,
+                    0.0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
       ]);
 
-      // Calculate approved leave days in this month to deduct from expected working days & hours
-      // identically to Admin Attendance Reports
-      let approvedLeaveDays = 0;
-      for (const leave of approvedMonthLeaves) {
-        if (Array.isArray(leave.workingDates) && leave.workingDates.length > 0) {
-          for (const wd of leave.workingDates) {
-            const wdMoment = moment(wd).tz(TZ);
-            if (wdMoment.isBetween(startOfMonth, endOfMonth, "day", "[]")) {
-              approvedLeaveDays += leave.isHalfDay ? 0.5 : 1.0;
-            }
-          }
-        } else {
-          approvedLeaveDays += leave.isHalfDay ? 0.5 : (leave.chargedDays || 1.0);
-        }
-      }
+      // Values computed directly via MongoDB aggregation pipelines
+      const approvedLeaveDays = leaveAggregates.length > 0 ? leaveAggregates[0].totalApprovedLeaves : 0;
+      const totalMinutesWorked = attendanceAggregates.length > 0 ? attendanceAggregates[0].totalMinutesWorked : 0;
+      const presentDaysCount = attendanceAggregates.length > 0 ? attendanceAggregates[0].presentDaysCount : 0;
+      const attLeaveCount = attendanceAggregates.length > 0 ? attendanceAggregates[0].attLeaveCount : 0;
 
-      const attLeaveCount = monthAttendances.filter(
-        (att) => att.status === AttendanceStatus.LEAVE && !att.checkIn
-      ).length;
       const effectiveLeaveDays = Math.max(approvedLeaveDays, attLeaveCount);
 
-      // Active working days and target hours excluding approved leaves
+      // Active working days and target hours excluding approved leaves (identically to Admin report)
       const activeWorkingDays = Math.max(0, workingDaysCount - effectiveLeaveDays);
       const targetMonthHours = parseFloat((activeWorkingDays * dailyHours).toFixed(2));
-
-      // Calculate total worked minutes and present credit identically to attendanceReport
-      let totalMinutesWorked = 0;
-      let presentDaysCount = 0;
-      const minFullMinutes = ((Number(shiftConfig.minHoursForFullDay) || 4) * 60);
-
-      for (const att of monthAttendances) {
-        let dayMinutes = 0;
-        if (typeof att.workingHours === "number" && !isNaN(att.workingHours)) {
-          dayMinutes = Math.round(att.workingHours * 60);
-        } else if (att.checkIn && att.checkOut) {
-          dayMinutes = Math.max(
-            0,
-            Math.round((new Date(att.checkOut) - new Date(att.checkIn)) / 60000),
-          );
-        }
-
-        if (dayMinutes > 0) {
-          totalMinutesWorked += dayMinutes;
-          presentDaysCount += dayMinutes >= minFullMinutes ? 1 : 0.5;
-        } else if (att.status === AttendanceStatus.PRESENT) {
-          presentDaysCount += 1;
-        } else if (att.status === AttendanceStatus.HALF_DAY) {
-          presentDaysCount += 0.5;
-        }
-      }
 
       // January Allowance Logic (Jan 15 - Jan 20)
       let januaryAllowance = null;

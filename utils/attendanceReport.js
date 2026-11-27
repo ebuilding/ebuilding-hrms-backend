@@ -54,40 +54,147 @@ export const calculateMonthlyReportData = async (monthStr) => {
   const endOfMonth = startOfMonth.clone().endOf("month");
   const daysInMonth = startOfMonth.daysInMonth();
 
-  // 1. Fetch Config, Holidays, Overrides, Active Employees, Attendance, Approved Leaves, and Shift Config
-  const [weekOffConfig, holidays, overrides, employees, attendances, approvedLeaves, shiftConfig] =
-    await Promise.all([
-      Config.findOne({ key: "weekOffDays" }).lean(),
-      Holiday.find({
-        date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
-      }).lean(),
-      CalendarOverride.find({
-        $or: [
-          { date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
-          { swapDate: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
-        ],
-      }).lean(),
-      Employee.find({
-        isDeleted: false,
-        $or: [
-          { approvalStatus: ApprovalStatus.APPROVED },
-          { approvalStatus: { $exists: false } },
-          { approvalStatus: null },
-        ],
-      })
-        .populate("department", "name")
-        .sort({ firstName: 1, lastName: 1 })
-        .lean(),
-      Attendance.find({
-        date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
-      }).lean(),
-      LeaveApplication.find({
-        status: LeaveStatus.APPROVED,
-        startDate: { $lte: endOfMonth.toDate() },
-        endDate: { $gte: startOfMonth.toDate() },
-      }).lean(),
-      getAttendanceShiftConfig(),
-    ]);
+  // 1. Fetch Config, Holidays, Overrides, Active Employees, Attendance, Approved Leaves, Shift Config, and MongoDB Aggregates
+  const [
+    weekOffConfig,
+    holidays,
+    overrides,
+    employees,
+    attendances,
+    approvedLeaves,
+    leaveAggregates,
+    attendanceAggregates,
+    shiftConfig,
+  ] = await Promise.all([
+    Config.findOne({ key: "weekOffDays" }).lean(),
+    Holiday.find({
+      date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
+    }).lean(),
+    CalendarOverride.find({
+      $or: [
+        { date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+        { swapDate: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() } },
+      ],
+    }).lean(),
+    Employee.find({
+      isDeleted: false,
+      $or: [
+        { approvalStatus: ApprovalStatus.APPROVED },
+        { approvalStatus: { $exists: false } },
+        { approvalStatus: null },
+      ],
+    })
+      .populate("department", "name")
+      .sort({ firstName: 1, lastName: 1 })
+      .lean(),
+    Attendance.find({
+      date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
+    }).lean(),
+    LeaveApplication.find({
+      status: LeaveStatus.APPROVED,
+      startDate: { $lte: endOfMonth.toDate() },
+      endDate: { $gte: startOfMonth.toDate() },
+    }).lean(),
+    LeaveApplication.aggregate([
+      {
+        $match: {
+          status: LeaveStatus.APPROVED,
+          startDate: { $lte: endOfMonth.toDate() },
+          endDate: { $gte: startOfMonth.toDate() },
+        },
+      },
+      {
+        $project: {
+          employeeId: 1,
+          isHalfDay: 1,
+          chargedDays: 1,
+          activeWorkingDates: {
+            $filter: {
+              input: { $ifNull: ["$workingDates", []] },
+              as: "d",
+              cond: {
+                $and: [
+                  { $gte: ["$$d", startOfMonth.toDate()] },
+                  { $lte: ["$$d", endOfMonth.toDate()] },
+                  {
+                    $not: {
+                      $in: [
+                        { $dateToString: { date: "$$d", timezone: TZ, format: "%Y-%m-%d" } },
+                        {
+                          $map: {
+                            input: { $ifNull: ["$revertedDates", []] },
+                            as: "rd",
+                            in: { $dateToString: { date: "$$rd", timezone: TZ, format: "%Y-%m-%d" } },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          employeeId: 1,
+          isHalfDay: 1,
+          leaveDays: {
+            $cond: [
+              { $gt: [{ $size: "$activeWorkingDates" }, 0] },
+              { $multiply: [{ $size: "$activeWorkingDates" }, { $cond: ["$isHalfDay", 0.5, 1.0] }] },
+              { $ifNull: ["$chargedDays", 1.0] },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$employeeId",
+          approvedLeaveDays: { $sum: "$leaveDays" },
+        },
+      },
+    ]),
+    Attendance.aggregate([
+      {
+        $match: {
+          date: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() },
+        },
+      },
+      {
+        $group: {
+          _id: "$employeeId",
+          totalWorkedMinutes: {
+            $sum: {
+              $cond: [
+                { $and: [{ $ne: ["$workingHours", null] }, { $gte: ["$workingHours", 0] }] },
+                { $round: [{ $multiply: ["$workingHours", 60] }] },
+                0,
+              ],
+            },
+          },
+          presentDays: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", AttendanceStatus.PRESENT] },
+                1.0,
+                { $cond: [{ $eq: ["$status", AttendanceStatus.HALF_DAY] }, 0.5, 0.0] },
+              ],
+            },
+          },
+        },
+      },
+    ]),
+    getAttendanceShiftConfig(),
+  ]);
+
+  const leaveAggMap = new Map(
+    leaveAggregates.map((l) => [l._id.toString(), l.approvedLeaveDays])
+  );
+  const attendanceAggMap = new Map(
+    attendanceAggregates.map((a) => [a._id.toString(), a])
+  );
 
   const defaultShiftHours = Number(shiftConfig?.shiftHours) || 9;
   const minFullDayMinutes = (Number(shiftConfig?.minHoursForFullDay) || 4) * 60;
@@ -134,7 +241,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
     attendanceByEmp.get(empIdStr).set(dateKey, att);
   }
 
-  // Index approved leaves by employeeId -> dateKey
+  // Index approved leaves by employeeId -> dateKey (excluding reverted dates)
   const leavesByEmp = new Map();
   for (const leave of approvedLeaves) {
     const empIdStr = leave.employeeId.toString();
@@ -142,16 +249,25 @@ export const calculateMonthlyReportData = async (monthStr) => {
       leavesByEmp.set(empIdStr, new Map());
     }
     const empLeaves = leavesByEmp.get(empIdStr);
+    const revertedDateKeys = new Set(
+      (leave.revertedDates || []).map((rd) => moment(rd).tz(TZ).format("YYYY-MM-DD"))
+    );
+
     if (Array.isArray(leave.workingDates) && leave.workingDates.length > 0) {
       for (const d of leave.workingDates) {
         const dKey = moment(d).tz(TZ).format("YYYY-MM-DD");
-        empLeaves.set(dKey, leave);
+        if (!revertedDateKeys.has(dKey)) {
+          empLeaves.set(dKey, leave);
+        }
       }
     } else {
       const cur = moment(leave.startDate).tz(TZ).startOf("day");
       const end = moment(leave.endDate).tz(TZ).startOf("day");
       while (cur.isSameOrBefore(end, "day")) {
-        empLeaves.set(cur.format("YYYY-MM-DD"), leave);
+        const dKey = cur.format("YYYY-MM-DD");
+        if (!revertedDateKeys.has(dKey)) {
+          empLeaves.set(dKey, leave);
+        }
         cur.add(1, "day");
       }
     }
@@ -253,18 +369,22 @@ export const calculateMonthlyReportData = async (monthStr) => {
             );
           }
 
-          if (isHalfDayLeave) {
+          if (approvedLeave) {
+            // Employee punched in on an approved leave day (e.g. early return before admin reverted)
+            statusCode = AttendanceStatus.PRESENT;
+            status = AttendanceStatusLabel[AttendanceStatus.PRESENT];
+            presentCredit = isHalfDayLeave
+              ? dayWorkedMinutes >= minFullDayMinutes ? 0.5 : 0
+              : 1.0;
+            // On an approved leave day, employee is excused from mandatory shift; worked hours count as surplus
+            dayExpectedMinutes = isHalfDayLeave ? halfShiftMinutes : 0;
+          } else if (isHalfDayLeave) {
             // Approved half-day leave: the punch only covers the remaining half,
             // so hours are measured against half a shift and leave credits 0.5
             statusCode = AttendanceStatus.HALF_DAY;
             status = AttendanceStatusLabel[AttendanceStatus.HALF_DAY];
             leaveCredit = 0.5;
-            presentCredit =
-              dayWorkedMinutes >= minFullDayMinutes
-                ? 0.5
-                : dayWorkedMinutes > 0
-                  ? 0.25
-                  : 0;
+            presentCredit = dayWorkedMinutes >= minFullDayMinutes ? 0.5 : 0;
             dayExpectedMinutes = halfShiftMinutes;
           } else if (
             att.dayType === DayType.HALF_DAY ||
@@ -358,10 +478,13 @@ export const calculateMonthlyReportData = async (monthStr) => {
 
     const hasAttendanceData = empAttendancesMap.size > 0 || totalWorkedMinutes > 0;
 
+    // Approved leave days derived directly from MongoDB aggregation pipeline (excluding reverted dates)
+    const approvedLeaveDaysFromApps = leaveAggMap.get(empIdStr) || 0;
+    const effectiveLeaveDays = Math.max(approvedLeaveDaysFromApps, leaveDaysCount);
+
     // Expected hours calculation:
-    // "expected hours is total working day * compnay hours (9). Hours worked is toal punch in out time sum house."
-    // Working days excluding approved leaves:
-    const activeWorkingDays = Math.max(0, empWorkingDaysCount - leaveDaysCount);
+    // Working days excluding approved leaves (identically to Employee Dashboard):
+    const activeWorkingDays = Math.max(0, empWorkingDaysCount - effectiveLeaveDays);
     const expectedMinutes = Math.round(activeWorkingDays * dailyShift * 60);
 
     let missedMinutes = 0;
@@ -405,7 +528,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
         position: emp.position || "",
         workingDays: empWorkingDaysCount,
         presentDays: presentDaysCount,
-        leave: leaveDaysCount,
+        leave: effectiveLeaveDays,
         notMarked: notMarkedDaysCount,
         hoursLogged: formatMinutesToHHMM(totalWorkedMinutes),
         expectedHours: formatMinutesToHHMM(expectedMinutes),
@@ -413,7 +536,7 @@ export const calculateMonthlyReportData = async (monthStr) => {
         hasData: true,
         rawWorkingDays: empWorkingDaysCount,
         rawPresentDays: presentDaysCount,
-        rawLeave: leaveDaysCount,
+        rawLeave: effectiveLeaveDays,
         rawNotMarked: notMarkedDaysCount,
         rawHoursLoggedMinutes: totalWorkedMinutes,
         rawExpectedMinutes: expectedMinutes,

@@ -648,9 +648,9 @@ export const processRevokeLeave = async (req, res) => {
 
     if (action === "APPROVE") {
       const todayStart = moment.tz(TZ).startOf("day");
-      if (moment(leave.startDate).tz(TZ).isBefore(todayStart)) {
+      if (moment(leave.endDate).tz(TZ).isBefore(todayStart)) {
         return res.status(400).json({
-          error: "Past leaves cannot be revoked. Only upcoming or active leaves can be revoked.",
+          error: "Past leaves that have already fully concluded cannot be revoked.",
         });
       }
 
@@ -757,6 +757,147 @@ ${adminComment ? `<div style="background:#fef2f2; border:1px solid #fecaca; bord
   } catch (error) {
     console.error("Process Revoke Leave Error:", error);
     return res.status(500).json({ error: error.message || "Failed to process leave revocation" });
+  }
+};
+
+// Admin: Revert specific individual dates of an approved leave (e.g. employee returned to work early)
+// PATCH /api/leave/:id/revert-dates
+export const revertPartialLeaveDates = async (req, res) => {
+  try {
+    const { dates, reason } = req.body;
+    if (!Array.isArray(dates) || dates.length === 0) {
+      return res.status(400).json({ error: "Please select at least one date to revert" });
+    }
+
+    const leave = await LeaveApplication.findById(req.params.id);
+    if (!leave) return res.status(404).json({ error: "Leave application not found" });
+
+    if (leave.status !== LeaveStatus.APPROVED && leave.status !== LeaveStatus.REVOKE_REQUESTED) {
+      return res.status(400).json({
+        error: `Cannot revert dates for leave with status ${leave.status}. Only approved leaves can have dates reverted.`,
+      });
+    }
+
+    const employee = await Employee.findById(leave.employeeId);
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+    // Normalize requested dates
+    const requestedDateKeys = new Set(
+      dates.map((d) => moment(d).tz(TZ).format("YYYY-MM-DD"))
+    );
+
+    const revertedDateKeys = new Set(
+      (leave.revertedDates || []).map((rd) => moment(rd).tz(TZ).format("YYYY-MM-DD"))
+    );
+
+    // Active candidate dates from workingDates or date range
+    let activeCandidates = [];
+    if (Array.isArray(leave.workingDates) && leave.workingDates.length > 0) {
+      activeCandidates = leave.workingDates.map((wd) => moment(wd).tz(TZ).format("YYYY-MM-DD"));
+    } else {
+      const cur = moment(leave.startDate).tz(TZ).startOf("day");
+      const end = moment(leave.endDate).tz(TZ).startOf("day");
+      while (cur.isSameOrBefore(end, "day")) {
+        activeCandidates.push(cur.format("YYYY-MM-DD"));
+        cur.add(1, "day");
+      }
+    }
+
+    // Filter valid dates that belong to this leave and are not already reverted
+    const validDatesToRevert = activeCandidates.filter(
+      (dKey) => requestedDateKeys.has(dKey) && !revertedDateKeys.has(dKey)
+    );
+
+    if (validDatesToRevert.length === 0) {
+      return res.status(400).json({
+        error: "None of the selected dates are active working days for this leave application.",
+      });
+    }
+
+    // Calculate days to refund
+    const dayMultiplier = leave.isHalfDay ? 0.5 : 1.0;
+    const calculatedRefund = validDatesToRevert.length * dayMultiplier;
+    const actualRefund = Math.min(leave.chargedDays || 0, calculatedRefund);
+
+    // 1. Atomically refund employee leave balance in MongoDB
+    if (actualRefund > 0) {
+      if (leave.type === LeaveType.PAID) {
+        await Employee.updateOne(
+          { _id: employee._id },
+          { $inc: { "leaveBalance.paid": actualRefund } }
+        );
+      } else if (leave.type === LeaveType.COMP_OFF) {
+        await Employee.updateOne(
+          { _id: employee._id },
+          { $inc: { "leaveBalance.compOff": actualRefund } }
+        );
+      }
+    }
+
+    // 2. Clean up synced Attendance records for the reverted dates
+    for (const dKey of validDatesToRevert) {
+      const startOfDay = moment.tz(dKey, "YYYY-MM-DD", TZ).startOf("day").toDate();
+      const endOfDay = moment.tz(dKey, "YYYY-MM-DD", TZ).endOf("day").toDate();
+
+      await Attendance.deleteMany({
+        employeeId: employee._id,
+        date: { $gte: startOfDay, $lte: endOfDay },
+        status: AttendanceStatus.LEAVE,
+      });
+    }
+
+    // 3. Update LeaveApplication document in MongoDB
+    const mongoRevertDates = validDatesToRevert.map((dKey) =>
+      moment.tz(dKey, "YYYY-MM-DD", TZ).startOf("day").toDate()
+    );
+
+    const remainingActiveDates = activeCandidates.filter(
+      (dKey) => !requestedDateKeys.has(dKey) && !revertedDateKeys.has(dKey)
+    );
+
+    const prevCharged = leave.chargedDays || 0;
+    const newCharged = Math.max(0, prevCharged - actualRefund);
+
+    leave.revertedDates = [...(leave.revertedDates || []), ...mongoRevertDates];
+    leave.chargedDays = newCharged;
+    leave.adminUpdatedAt = new Date();
+
+    const note = reason?.trim()
+      ? `${reason.trim()} (Reverted: ${validDatesToRevert.join(", ")})`
+      : `Reverted dates by Admin: ${validDatesToRevert.join(", ")}`;
+
+    if (remainingActiveDates.length === 0) {
+      leave.status = LeaveStatus.REVERTED;
+      leave.revertReason = note;
+      leave.revertedAt = new Date();
+      leave.workingDates = [];
+    } else {
+      const remainingMoments = remainingActiveDates
+        .map((dKey) => moment.tz(dKey, "YYYY-MM-DD", TZ).startOf("day"))
+        .sort((a, b) => a.valueOf() - b.valueOf());
+
+      leave.startDate = remainingMoments[0].toDate();
+      leave.endDate = remainingMoments[remainingMoments.length - 1].toDate();
+      leave.workingDates = remainingMoments.map((m) => m.toDate());
+      leave.revertReason = note;
+      if (leave.status === LeaveStatus.REVOKE_REQUESTED) {
+        leave.status = LeaveStatus.APPROVED;
+      }
+    }
+
+    await leave.save();
+
+    return res.json({
+      success: true,
+      message: `Successfully reverted ${validDatesToRevert.length} day(s) and refunded ${actualRefund} leave day(s).`,
+      refundedDays: actualRefund,
+      remainingChargedDays: newCharged,
+      revertedDates: validDatesToRevert,
+      leave,
+    });
+  } catch (error) {
+    console.error("revertPartialLeaveDates error:", error);
+    return res.status(500).json({ error: error.message || "Failed to revert leave dates" });
   }
 };
 

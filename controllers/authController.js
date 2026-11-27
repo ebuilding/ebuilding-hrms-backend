@@ -2,6 +2,7 @@ import crypto from "crypto";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import PasswordResetToken from "../models/PasswordResetToken.js";
+import RefreshToken from "../models/RefreshToken.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import sendEmail from "../config/nodemailer.js";
@@ -20,6 +21,39 @@ import {
   PasswordResetConfig,
 } from "../constants/enums.js";
 import { getAttendanceShiftConfig } from "../utils/shiftConfig.js";
+
+const REFRESH_TOKEN_LIFETIME_DAYS = 30;
+
+/**
+ * Generates an access token (15m) and a secure random refresh token (30 days) tracked in MongoDB
+ */
+export const generateTokens = async (user, req = null) => {
+  const payload = {
+    userId: user._id.toString(),
+    role: user.role,
+    email: user.email,
+  };
+
+  const token = jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: "15m",
+  });
+
+  const refreshTokenStr = crypto.randomBytes(40).toString("hex");
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_LIFETIME_DAYS * 24 * 60 * 60 * 1000);
+
+  const ip = req?.ip || req?.headers?.["x-forwarded-for"] || "";
+  const ua = req?.headers?.["user-agent"] || "";
+
+  await RefreshToken.create({
+    token: refreshTokenStr,
+    userId: user._id,
+    expiresAt,
+    createdByIp: String(ip).slice(0, 100),
+    userAgent: String(ua).slice(0, 250),
+  });
+
+  return { token, refreshToken: refreshTokenStr, user: payload };
+};
 
 // Login for employee and admin
 // POST /api/auth/login
@@ -71,20 +105,76 @@ export const login = async (req, res) => {
       }
     }
 
-    const payload = {
-      userId: user._id.toString(),
-      role: user.role,
-      email: user.email,
-    };
+    const tokens = await generateTokens(user, req);
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-    return res.json({ user: payload, token });
+    return res.json(tokens);
   } catch (error) {
     console.error("Login error:", error);
     return res.status(500).json({ error: "Login failed" });
+  }
+};
+
+// Refresh access token using active refresh token
+// POST /api/auth/refresh-token
+export const refreshToken = async (req, res) => {
+  try {
+    const { refreshToken: reqRefreshToken } = req.body;
+    if (!reqRefreshToken) {
+      return res.status(400).json({ error: "Refresh token is required" });
+    }
+
+    // Atomically find valid refresh token in MongoDB
+    const tokenDoc = await RefreshToken.findOne({
+      token: reqRefreshToken,
+      isRevoked: false,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!tokenDoc) {
+      return res.status(401).json({
+        error: "Invalid or expired refresh token",
+        code: "REFRESH_TOKEN_INVALID",
+      });
+    }
+
+    // Verify user exists and is not deactivated
+    const user = await User.findById(tokenDoc.userId);
+    if (!user || user.isApproved === false) {
+      await RefreshToken.updateOne({ _id: tokenDoc._id }, { $set: { isRevoked: true } });
+      return res.status(401).json({
+        error: "User account is inactive or not found",
+        code: "USER_INACTIVE",
+      });
+    }
+
+    // Revoke old refresh token (token rotation prevents replay attacks)
+    await RefreshToken.updateOne({ _id: tokenDoc._id }, { $set: { isRevoked: true } });
+
+    // Generate fresh token pair
+    const tokens = await generateTokens(user, req);
+
+    return res.json(tokens);
+  } catch (error) {
+    console.error("Refresh token error:", error);
+    return res.status(500).json({ error: "Failed to refresh token" });
+  }
+};
+
+// Logout by revoking refresh token
+// POST /api/auth/logout
+export const logout = async (req, res) => {
+  try {
+    const { refreshToken: reqRefreshToken } = req.body;
+    if (reqRefreshToken) {
+      await RefreshToken.updateOne(
+        { token: reqRefreshToken },
+        { $set: { isRevoked: true } }
+      );
+    }
+    return res.json({ success: true, message: "Logged out successfully" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    return res.status(500).json({ error: "Failed to logout" });
   }
 };
 
