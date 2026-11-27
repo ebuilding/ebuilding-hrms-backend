@@ -179,11 +179,31 @@ export const clockInOut = async (req, res) => {
       );
       openRecord.workingHours = parseFloat(duration.toFixed(2));
       const shiftConfig = await getAttendanceShiftConfig();
-      const { dayType } = determineAttendanceDayType(
-        openRecord.workingHours,
-        shiftConfig,
-      );
-      openRecord.dayType = dayType;
+
+      // Check if this date has an approved half-day leave
+      const isApprovedHalfDayLeave =
+        openRecord.dayType === DayType.HALF_DAY ||
+        openRecord.halfDayType != null ||
+        (await LeaveApplication.exists({
+          employeeId: employee._id,
+          status: LeaveStatus.APPROVED,
+          isHalfDay: true,
+          startDate: { $lte: moment(openRecord.date).tz(TZ).endOf("day").toDate() },
+          endDate: { $gte: moment(openRecord.date).tz(TZ).startOf("day").toDate() },
+        }));
+
+      if (isApprovedHalfDayLeave) {
+        // If employee applied for half-day leave, it remains Half Day ONLY even if they worked 6h or 9h,
+        // until admin reverts the half-day leave!
+        openRecord.dayType = DayType.HALF_DAY;
+        openRecord.status = AttendanceStatus.HALF_DAY;
+      } else {
+        const { dayType } = determineAttendanceDayType(
+          openRecord.workingHours,
+          shiftConfig,
+        );
+        openRecord.dayType = dayType;
+      }
       await openRecord.save();
       // Comp-off is not credited automatically; employee must submit a Comp-Off Request for admin approval
       return res.json({ success: true, type: "CHECK_OUT", data: openRecord });
@@ -454,6 +474,9 @@ export const getAttendance = async (req, res) => {
           message: "Active approved leave on this date. Revert leave in Leave Management to refund leave balance.",
         };
         workedOnLeaveDaysCount++;
+      } else if (activeLeave && activeLeave.isHalfDay) {
+        rec.isHalfDayLeave = true;
+        rec.halfDayType = activeLeave.halfDayType || null;
       }
     }
 
@@ -587,22 +610,46 @@ export const adminClockInOut = async (req, res) => {
         (checkOutTime - checkInTime) / (1000 * 60 * 60),
       );
       attendance.workingHours = parseFloat(duration.toFixed(2));
-      attendance.status = status || AttendanceStatus.PRESENT;
 
       if (dayType) {
         attendance.dayType = dayType;
+        attendance.status = status || (dayType === DayType.HALF_DAY ? AttendanceStatus.HALF_DAY : AttendanceStatus.PRESENT);
       } else {
-        const shiftConfig = await getAttendanceShiftConfig();
-        attendance.dayType = determineAttendanceDayType(
-          attendance.workingHours,
-          shiftConfig,
-        ).dayType;
+        const isApprovedHalfDayLeave = await LeaveApplication.exists({
+          employeeId,
+          status: LeaveStatus.APPROVED,
+          isHalfDay: true,
+          startDate: { $lte: todayEnd },
+          endDate: { $gte: todayStart },
+        });
+
+        if (isApprovedHalfDayLeave) {
+          // If employee applied for half-day leave, it remains Half Day ONLY even if they worked 6h or 9h,
+          // until admin reverts the half-day leave!
+          attendance.dayType = DayType.HALF_DAY;
+          attendance.status = AttendanceStatus.HALF_DAY;
+        } else {
+          const shiftConfig = await getAttendanceShiftConfig();
+          const { dayType: determinedDayType, status: determinedStatus } = determineAttendanceDayType(
+            attendance.workingHours,
+            shiftConfig,
+          );
+          attendance.dayType = determinedDayType;
+          attendance.status = status || determinedStatus;
+        }
       }
     } else if (checkInTime && !checkOutTime) {
       // Re-opened shift or open punch (employee can clock out at end of day)
+      const isApprovedHalfDayLeave = await LeaveApplication.exists({
+        employeeId,
+        status: LeaveStatus.APPROVED,
+        isHalfDay: true,
+        startDate: { $lte: todayEnd },
+        endDate: { $gte: todayStart },
+      });
       attendance.workingHours = null;
-      attendance.dayType = dayType || DayType.FULL_DAY;
-      attendance.status = status || AttendanceStatus.PRESENT;
+      attendance.dayType = dayType || (isApprovedHalfDayLeave ? DayType.HALF_DAY : DayType.FULL_DAY);
+      attendance.status = status || (isApprovedHalfDayLeave ? AttendanceStatus.HALF_DAY : AttendanceStatus.PRESENT);
       // Re-dispatch auto checkout reminder
       await sendCheckOutEvent(attendance);
     } else {

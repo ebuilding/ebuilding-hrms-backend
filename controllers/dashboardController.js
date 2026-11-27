@@ -10,6 +10,7 @@ import {
   LeaveStatus,
   UserRole,
   ApprovalStatus,
+  DayType,
 } from "../constants/enums.js";
 
 import RegistrationInvite from "../models/RegistrationInvite.js";

@@ -5,6 +5,7 @@ import { getEmailTemplate } from "../utils/emailTemplates.js";
 import Employee from "../models/Employee.js";
 import LeaveApplication from "../models/LeaveApplication.js";
 import LeavePolicy from "../models/LeavePolicy.js";
+import LeaveLedger from "../models/LeaveLedger.js";
 import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
 import CalendarOverride from "../models/CalendarOverride.js";
@@ -840,6 +841,25 @@ export const revertPartialLeaveDates = async (req, res) => {
           { _id: employee._id },
           { $inc: { "leaveBalance.paid": actualRefund } }
         );
+
+        if (leave.paidPolicyId) {
+          try {
+            await LeaveLedger.create({
+              employeeId: employee._id,
+              policyId: leave.paidPolicyId,
+              leaveApplicationId: leave._id,
+              type: "RELEASE",
+              amount: actualRefund,
+              balanceChange: actualRefund,
+              effectiveAt: new Date(),
+              idempotencyKey: `revert-dates:${leave._id}:${validDatesToRevert.sort().join(",")}`,
+              createdBy: req.session?.email || "Admin",
+              note: `Leave reverted for ${validDatesToRevert.length} day(s) (${validDatesToRevert.join(", ")})`,
+            });
+          } catch (ledgerErr) {
+            console.error("Ledger revert entry error (non-fatal):", ledgerErr);
+          }
+        }
       } else if (leave.type === LeaveType.COMP_OFF) {
         await Employee.updateOne(
           { _id: employee._id },

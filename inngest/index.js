@@ -8,7 +8,7 @@ import Holiday from "../models/Holiday.js";
 import CalendarOverride from "../models/CalendarOverride.js";
 import Config from "../models/Config.js";
 import sendEmail from "../config/nodemailer.js";
-import { AttendanceStatus, LeaveStatus } from "../constants/enums.js";
+import { AttendanceStatus, LeaveStatus, DayType } from "../constants/enums.js";
 import { getCalendarDaySchedule } from "../utils/calendarSchedule.js";
 import {
   getAttendanceShiftConfig,
@@ -268,11 +268,38 @@ const autoCheckOut = inngest.createFunction(
 
     const shiftConfig = await getAttendanceShiftConfig();
     const checkInMoment = moment(attendance.checkIn).tz(TZ);
-    let checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
 
-    // If check-in occurred at or after shift end time, set checkout to next day
-    if (checkOutMoment.isSameOrBefore(checkInMoment)) {
-      checkOutMoment.add(1, "day");
+    // Check if this attendance record or approved leave is for a SECOND_HALF day
+    const isSecondHalfLeave =
+      attendance.halfDayType === "SECOND_HALF" ||
+      (await LeaveApplication.exists({
+        employeeId: attendance.employeeId,
+        status: LeaveStatus.APPROVED,
+        isHalfDay: true,
+        halfDayType: "SECOND_HALF",
+        startDate: { $lte: checkInMoment.clone().endOf("day").toDate() },
+        endDate: { $gte: checkInMoment.clone().startOf("day").toDate() },
+      }));
+
+    let checkOutMoment;
+    if (isSecondHalfLeave) {
+      // Second-half leave: employee works morning half (~4.5h), shift ends around 2:30 PM - 3:00 PM
+      const halfShiftHours = (Number(shiftConfig?.shiftHours) || 9) / 2;
+      checkOutMoment = checkInMoment.clone().add(halfShiftHours, "hours");
+      const maxHalfDayEnd = moment.tz(
+        `${checkInMoment.format("YYYY-MM-DD")} 03:00 PM`,
+        "YYYY-MM-DD hh:mm A",
+        TZ,
+      );
+      if (checkOutMoment.isAfter(maxHalfDayEnd)) {
+        checkOutMoment = maxHalfDayEnd;
+      }
+    } else {
+      checkOutMoment = getShiftEndMoment(checkInMoment, shiftConfig);
+      // If check-in occurred at or after shift end time, set checkout to next day
+      if (checkOutMoment.isSameOrBefore(checkInMoment)) {
+        checkOutMoment.add(1, "day");
+      }
     }
 
     attendance.checkOut = checkOutMoment.toDate();
@@ -281,12 +308,18 @@ const autoCheckOut = inngest.createFunction(
       (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60),
     );
     attendance.workingHours = parseFloat(duration.toFixed(2));
-    const { dayType } = determineAttendanceDayType(
-      attendance.workingHours,
-      shiftConfig,
-    );
-    attendance.dayType = dayType;
-    attendance.status = AttendanceStatus.PRESENT;
+    if (isSecondHalfLeave) {
+      attendance.dayType = DayType.HALF_DAY;
+      attendance.halfDayType = "SECOND_HALF";
+      attendance.status = AttendanceStatus.HALF_DAY;
+    } else {
+      const { dayType } = determineAttendanceDayType(
+        attendance.workingHours,
+        shiftConfig,
+      );
+      attendance.dayType = dayType;
+      attendance.status = AttendanceStatus.PRESENT;
+    }
     attendance.updatedBy = "System";
     attendance.adminUpdatedAt = new Date();
     await attendance.save();
